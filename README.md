@@ -5,7 +5,7 @@
 [![UI: PySide6](https://img.shields.io/badge/UI-PySide6%20%2F%20Qt6-teal.svg)](https://pypi.org/project/PySide6/)
 [![CAD: IngeTrazo](https://img.shields.io/badge/Platform-IngeTrazo%20CAD-orange.svg)](https://github.com/seghier)
 
-High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://github.com/seghier/ingetrazo), providing a **Rhino 8 / Blender style 3D Gumball Manipulator** and an interactive **Autodesk-style Navigation Cube (ViewCube)** with zero external dependencies.
+High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://github.com/seghier/ingetrazo), providing a **Rhino 8 / Blender style 3D Gumball Manipulator** and an interactive **Freecad-style Navigation Cube** with zero external dependencies.
 
 ---
 
