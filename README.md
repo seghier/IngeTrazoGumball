@@ -60,6 +60,24 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 
 ---
 
+### ⭕ 3. Customizable Viewport Radial Menu (Pie Menu)
+* **Direct In-Viewport Double-Click Activation**:
+  * Double-click anywhere in the 3D viewport (or use middle click, right click, or hotkey) to instantly spawn the radial marking menu centered under your cursor.
+* **8 Ergonomic Quick-Access CAD Sectors**:
+  * Preloaded with high-frequency CAD commands: **Select** (Space), **Line** (L), **Push / Pull** (P), **Rectangle** (R), **Move** (M), **Rotate** (Q), **Undo** (Ctrl+Z), and **Eraser** (E).
+* **Live Center Hub & Directional Feedback**:
+  * Hovering towards any wedge illuminates the sector in vibrant IngeTrazo orange with smooth border scaling, displaying the command's full name, icon, and shortcut directly in the center hub.
+* **Full In-App Customization Dialog**:
+  * Open **Extensions ▶ ⭕ Radial Menu Settings...** or **Tools ▶ ⭕ Radial Menu Settings...** to customize your radial menu.
+  * **Add Any Existing Command**: Deep inspection of all 240+ registered IngeTrazo commands grouped by category (Draw, Tools, Edit, Camera, Extensions) with instant search filtering.
+  * **Reorder & Resize**: Move slots clockwise or counter-clockwise, add/remove slots (4 to 12 wedges), adjust outer and inner radii.
+  * **Configurable Triggers**: Choose between Left Double-Click, Middle Click, Right Click, or custom Hotkey.
+* **Persistent Configuration**:
+  * Automatically saves to 
+adial_menu.json and updates live without requiring an application restart.
+
+---
+
 ## 🚀 Installation
 
 ### Easy Install (Folder Copy)
@@ -92,6 +110,7 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 IngeTrazoGumball/
 ├── __init__.py          # Gumball manipulator & extension entry point (setup(app))
 ├── viewcube.py          # Complete ViewCube module (isolated, pure QPainter)
+├── radialmenu.py        # Complete Radial Menu & Settings module (isolated, customizable)
 ├── extension.json       # Plugin manifest metadata
 ├── gumball.png          # High-resolution toolbar icon
 ```

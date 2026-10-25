@@ -2240,5 +2240,12 @@ def setup(app: Any) -> None:
         except Exception as vc_ex:
             log.warning(f"Failed to initialize ViewCube: {vc_ex}")
 
+        # Initialize separated Radial Menu (Pie Menu) module
+        try:
+            from .radialmenu import setup_radial_menu
+            setup_radial_menu(app)
+        except Exception as rm_ex:
+            log.warning(f"Failed to initialize Radial Menu: {rm_ex}")
+
     except Exception as e:
         log.exception(f"Failed to initialize Gumball Manipulator plugin: {e}")
