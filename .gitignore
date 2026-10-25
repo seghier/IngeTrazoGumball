@@ -8,6 +8,8 @@ dist/
 build/
 *.egg-info/
 *.zip
+!gumball.zip
+build_zip.py
 
 # Logs and databases
 *.log

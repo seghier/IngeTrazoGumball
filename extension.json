@@ -1,7 +1,7 @@
 {
   "id": "gumball",
   "name": "Gumball Manipulator & ViewCube",
-  "version": "1.0.0",
+  "version": "1.0",
   "author": "seghier",
   "description": "Interactive 3D Gumball transform manipulator and 3D Navigation Cube (ViewCube) for IngeTrazo."
 }
