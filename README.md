@@ -94,9 +94,6 @@ IngeTrazoGumball/
 ├── viewcube.py          # Complete ViewCube module (isolated, pure QPainter)
 ├── extension.json       # Plugin manifest metadata
 ├── gumball.png          # High-resolution toolbar icon
-└── tests/
-    ├── __init__.py
-    └── test_viewcube.py # Automated unit test suite
 ```
 
 * **Zero Heavy C++ / OpenGL Dependencies**: Built with pure PySide6 vector projection and antialiased `QPainter` overlay rendering.
@@ -104,14 +101,6 @@ IngeTrazoGumball/
 * **Frame-Accurate Camera Binding**: Synchronized directly with IngeTrazo's native `OrbitCamera`.
 
 ---
-
-## 🧪 Testing
-
-To run the automated unit test suite:
-
-```bash
-python -m unittest discover -s tests
-```
 
 ---
 
