@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -312,7 +313,7 @@ class RadialMenuWidget(QWidget):
         if vp is None:
             return
 
-        total_size = int((self.outer_radius + 60) * 2)
+        total_size = int((self.outer_radius + 20) * 2)
         half = total_size // 2
 
         # Clamp center position so radial circle stays fully inside viewport boundaries
@@ -328,6 +329,7 @@ class RadialMenuWidget(QWidget):
         self.grabMouse()
 
     def close_menu(self) -> None:
+        QToolTip.hideText()
         self.releaseMouse()
         self.hide()
         vp = self.parentWidget()
@@ -400,9 +402,13 @@ class RadialMenuWidget(QWidget):
                 slot = self.slots[new_hover]
                 act = self.controller.resolve_action(slot)
                 sc = slot.get("shortcut") or (act.shortcut().toString() if act else "")
-                self.setToolTip(f"{slot.get('name', '')}  ({sc})" if sc else slot.get("name", ""))
+                tip = f"{slot.get('name', '')}  ({sc})" if sc else slot.get("name", "")
+                self.setToolTip(tip)
+                global_pos = event.globalPosition().toPoint() if hasattr(event, "globalPosition") else event.globalPos()
+                QToolTip.showText(global_pos, tip, self)
             else:
                 self.setToolTip("")
+                QToolTip.hideText()
             self.update()
 
     def mousePressEvent(self, event) -> None:
@@ -523,45 +529,6 @@ class RadialMenuWidget(QWidget):
             painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Normal))
             painter.setPen(QPen(QColor(130, 145, 165)))
             painter.drawText(QRectF(cx - 20, cy - 12, 40, 24), Qt.AlignmentFlag.AlignCenter, "✕")
-
-        # 4. Floating Tooltip Badge for Hovered Command
-        if is_hub_active:
-            hov_slot = self.slots[self.hovered_index]
-            hov_act = self.controller.resolve_action(hov_slot)
-            cmd_name = hov_slot.get("name", "")
-            sc = hov_slot.get("shortcut") or (hov_act.shortcut().toString() if hov_act else "")
-            tip_text = f"{cmd_name}  ({sc})" if sc else cmd_name
-
-            tip_font = QFont("Segoe UI", 9, QFont.Weight.Bold)
-            fm = QFontMetrics(tip_font)
-            tip_w = fm.horizontalAdvance(tip_text) + 24
-            tip_h = 28
-
-            hov_theta = self.hovered_index * step
-            r_tip = self.outer_radius + 32.0
-            tx = cx + r_tip * math.sin(hov_theta)
-            ty = cy - r_tip * math.cos(hov_theta)
-
-            tip_rect = QRectF(tx - tip_w / 2, ty - tip_h / 2, tip_w, tip_h)
-
-            # Keep tooltip within widget bounds
-            margin = 8.0
-            if tip_rect.left() < margin:
-                tip_rect.moveLeft(margin)
-            if tip_rect.right() > self.width() - margin:
-                tip_rect.moveRight(self.width() - margin)
-            if tip_rect.top() < margin:
-                tip_rect.moveTop(margin)
-            if tip_rect.bottom() > self.height() - margin:
-                tip_rect.moveBottom(self.height() - margin)
-
-            painter.setBrush(QBrush(QColor(18, 22, 30, 248)))
-            painter.setPen(QPen(self.COLOR_BORDER_HOVER, 1.6))
-            painter.drawRoundedRect(tip_rect, 6.0, 6.0)
-
-            painter.setFont(tip_font)
-            painter.setPen(QPen(QColor(255, 255, 255)))
-            painter.drawText(tip_rect, Qt.AlignmentFlag.AlignCenter, tip_text)
 
 
 # ============================================================================
