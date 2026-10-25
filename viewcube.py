@@ -360,15 +360,15 @@ class ViewCubeController(QObject):
             yaw = math.atan2(dn.y(), dn.x())
             xy = math.hypot(dn.x(), dn.y())
             pitch = math.atan2(dn.z(), xy)
-            pitch = max(min(pitch, math.radians(89.0)), math.radians(-89.0))
+            pitch = max(min(pitch, math.radians(90.0)), math.radians(-90.0))
             return yaw, pitch
 
         # 1. 6 Octagonal Main Faces
         face_specs = [
             ("TOP", QVector3D(0, 0, 1), QVector3D(1, 0, 0), QVector3D(0, 1, 0),
-             (math.radians(-90.0), math.radians(89.0))),
+             (math.radians(-90.0), math.radians(90.0))),
             ("BOTTOM", QVector3D(0, 0, -1), QVector3D(1, 0, 0), QVector3D(0, -1, 0),
-             (math.radians(-90.0), math.radians(-89.0))),
+             (math.radians(-90.0), math.radians(-90.0))),
             ("FRONT", QVector3D(0, -1, 0), QVector3D(1, 0, 0), QVector3D(0, 0, 1),
              (math.radians(-90.0), 0.0)),
             ("BACK", QVector3D(0, 1, 0), QVector3D(-1, 0, 0), QVector3D(0, 0, 1),
@@ -858,7 +858,7 @@ class ViewCubeController(QObject):
         self._anim_start_yaw = cam.yaw
         self._anim_start_pitch = cam.pitch
 
-        target_pitch = max(min(target_pitch, math.radians(89.0)), math.radians(-89.0))
+        target_pitch = max(min(target_pitch, math.radians(90.0)), math.radians(-90.0))
 
         self._anim_diff_yaw = _shortest_angle_diff(target_yaw, self._anim_start_yaw)
         self._anim_diff_pitch = target_pitch - self._anim_start_pitch
@@ -908,10 +908,10 @@ class ViewCubeController(QObject):
         roll_rad = math.radians(90.0)
 
         if action_id == "ARROW_UP":
-            target_pitch = min(cur_pitch + step_rad, math.radians(89.0))
+            target_pitch = min(cur_pitch + step_rad, math.radians(90.0))
             self.animate_to(cur_yaw, target_pitch)
         elif action_id == "ARROW_DOWN":
-            target_pitch = max(cur_pitch - step_rad, math.radians(-89.0))
+            target_pitch = max(cur_pitch - step_rad, math.radians(-90.0))
             self.animate_to(cur_yaw, target_pitch)
         elif action_id == "ARROW_LEFT":
             self.animate_to(cur_yaw - step_rad, cur_pitch)
