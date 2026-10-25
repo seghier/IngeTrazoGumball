@@ -60,18 +60,18 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 
 ---
 
-### ⭕ 3. Customizable Viewport Radial Menu (Pie Menu)
+### ⭕ 3. Customizable 2-Row Viewport Radial Menu (Pie Menu)
+* **Two Concentric Tiers / Rows (16 Quick-Access CAD Tools)**:
+  * **Inner Row (Row 1)**: 8 fast-flick primary tools closest to cursor: **Select** (Space), **Line** (L), **Push / Pull** (P), **Rectangle** (R), **Move** (M), **Rotate** (Q), **Undo** (Ctrl+Z), **Eraser** (E).
+  * **Outer Row (Row 2)**: 8 extended CAD tools in the outer concentric ring: **Tape Measure** (T), **Circle** (C), **Offset** (F), **Arc** (A), **Scale** (S), **Follow Me**, **Redo** (Ctrl+Y), **Paint Bucket** (B).
 * **Direct In-Viewport Double-Click Activation**:
-  * Double-click anywhere in the 3D viewport (or use middle click, right click, or hotkey) to instantly spawn the radial marking menu centered under your cursor.
-* **8 Ergonomic Quick-Access CAD Sectors**:
-  * Preloaded with high-frequency CAD commands: **Select** (Space), **Line** (L), **Push / Pull** (P), **Rectangle** (R), **Move** (M), **Rotate** (Q), **Undo** (Ctrl+Z), and **Eraser** (E).
-* **Live Center Hub & Directional Feedback**:
-  * Hovering towards any wedge illuminates the sector in vibrant IngeTrazo orange with smooth border scaling, displaying the command's full name, icon, and shortcut directly in the center hub.
+  * Double-click anywhere in the 3D viewport (or use middle click, right click, or hotkey) to instantly spawn the 2-row radial menu centered under your cursor.
+* **Instant Native Tooltips & Live Center Hub**:
+  * Hovering towards any wedge in either row illuminates the sector in vibrant IngeTrazo gold-orange, shows an instant tooltip with command name & shortcut, and previews the icon in the center hub.
 * **Full In-App Customization Dialog**:
-  * Open **Extensions ▶ ⭕ Radial Menu Settings...** or **Tools ▶ ⭕ Radial Menu Settings...** to customize your radial menu.
-  * **Add Any Existing Command**: Deep inspection of all 240+ registered IngeTrazo commands grouped by category (Draw, Tools, Edit, Camera, Extensions) with instant search filtering.
-  * **Reorder & Resize**: Move slots clockwise or counter-clockwise, add/remove slots (4 to 12 wedges), adjust outer and inner radii.
-  * **Configurable Triggers**: Choose between Left Double-Click, Middle Click, Right Click, or custom Hotkey.
+  * Open **Extensions ▶ ⭕ Radial Menu Settings...** or **Tools ▶ ⭕ Radial Menu Settings...** to customize both rows independently with dedicated tabs for Inner Row and Outer Row.
+  * **Assign Any Existing Command**: Deep inspection of all registered IngeTrazo commands grouped by category with instant search filtering.
+  * **Reorder & Resize**: Move slots clockwise/counter-clockwise, add/remove slots (4 to 12 wedges per ring), and customize activation triggers.
 * **Persistent Configuration**:
   * Automatically saves to 
 adial_menu.json and updates live without requiring an application restart.
