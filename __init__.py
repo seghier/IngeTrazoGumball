@@ -2233,12 +2233,12 @@ def setup(app: Any) -> None:
             except Exception:
                 pass
 
-        # Initialize separated Navigation Cube (ViewCube) module
+        # Initialize separated Navigation Orbit (NavOrbit) module
         try:
-            from .viewcube import setup_viewcube
-            setup_viewcube(app)
-        except Exception as vc_ex:
-            log.warning(f"Failed to initialize ViewCube: {vc_ex}")
+            from .navorbit import setup_navorbit
+            setup_navorbit(app)
+        except Exception as no_ex:
+            log.warning(f"Failed to initialize NavOrbit: {no_ex}")
 
         # Initialize separated Radial Menu (Pie Menu) module
         try:

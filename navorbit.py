@@ -1,18 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-IngeTrazo Navigation Cube (ViewCube) Plugin Module.
-=================================================
-Interactive 3D orientation & navigation gizmo (FreeCAD / CAD style) featuring:
-- 26 Clickable Watertight Hit Zones:
-  * 6 Octagonal Primary Faces: TOP, BOTTOM, FRONT, BACK, RIGHT, LEFT (with 3D sheared labels)
-  * 12 Rectangular Beveled Edges: Snaps to 45° combination views
-  * 8 Hexagonal Corner Caps: Snaps to 3D isometric perspectives
-- 4 Directional Step Triangles (▲ ▼ ◄ ►) for 45°/90° orbital steps
-- 2 Thick Curved Ribbon Roll Arrows (↶ ↷) at the top-left and top-right
+IngeTrazo Navigation Orbit (NavOrbit) Plugin Module.
+==================================================
+Interactive 3D orientation & navigation gizmo featuring:
+- 6 Clickable Primary Cube Faces: TOP, BOTTOM, FRONT, BACK, RIGHT, LEFT (with 3D sheared labels)
+- Clean, unchamfered solid cube without edges or corner hit zones
+- 4 Directional Step Triangles (▲ ▼ ◄ ►) for 45° orbital steps (up, down, left, right)
+- 2 Thick Curved Ribbon Roll Arrows (↶ ↷) at the top-left and top-right for 90° roll steps
 - Top-Right Home Button (🏠): Smoothly restores default isometric view
 - Bottom-Right Mini Cube: Switches camera between Orthographic and Perspective projection
-- No RGB Coordinate Axes (clean viewport appearance)
-- Free Orbit Dragging: Click and drag anywhere on the cube to spin the scene
+- Free Orbit Dragging: Click and drag anywhere on the cube to smoothly spin the scene
 - Smooth Camera Glide: Eased 60fps interpolation between views
 """
 
@@ -30,7 +27,6 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QPainter,
-    QPainterPath,
     QPen,
     QPolygonF,
     QTransform,
@@ -48,17 +44,11 @@ def _shortest_angle_diff(target: float, current: float) -> float:
     return diff
 
 
-class ViewCubeController(QObject):
-    """Interactive Navigation Cube (ViewCube) controller for IngeTrazo."""
+class NavOrbitController(QObject):
+    """Interactive Navigation Orbit (NavOrbit) controller for IngeTrazo."""
 
-    # Chamfered cube proportions (watertight cantellated cube: 0 < CHAMFER_A < CHAMFER_B < 1)
-    CHAMFER_B = 0.72  # Straight edge offset from face center
-    CHAMFER_A = 0.45  # Corner cut offset along the straight edge
-
-    # Visual Palette (matches reference CAD style)
+    # Visual Palette (clean, modern CAD style)
     COLOR_FACE_BASE = QColor(210, 212, 216)
-    COLOR_EDGE_BASE = QColor(190, 193, 198)
-    COLOR_CORNER_BASE = QColor(180, 183, 188)
     COLOR_BUTTON_FILL = QColor(204, 206, 210, 235)
     COLOR_HOVER_FILL = QColor(95, 185, 255, 240)
     COLOR_PRESS_FILL = QColor(55, 145, 225, 245)
@@ -71,15 +61,17 @@ class ViewCubeController(QObject):
         self._window: Any = None
         self._viewport: Any = None
 
-        # Settings & State
-        self.settings = QSettings("IngeTrazo", "ViewCube")
-        self.enabled = self.settings.value("enabled", True, type=bool)
+        # Settings & State (with fallback migration from legacy ViewCube settings)
+        self.settings = QSettings("IngeTrazo", "NavOrbit")
+        old_val = QSettings("IngeTrazo", "ViewCube").value("enabled", None)
+        default_enabled = True if old_val is None else bool(old_val)
+        self.enabled = self.settings.value("enabled", default_enabled, type=bool)
 
         # Layout geometry (top-right corner of viewport)
         self.margin_right = 20.0
         self.margin_top = 20.0
-        self.widget_radius = 74.0      # Total interactive radius from center
-        self.cube_scale = 36.0         # 3D cube half-extent in screen pixels
+        self.widget_radius = 75.0      # Total interactive radius from center
+        self.cube_scale = 31.0         # 3D cube half-extent in screen pixels
 
         # Interaction state
         self.hovered_part: Optional[Dict[str, Any]] = None
@@ -96,7 +88,7 @@ class ViewCubeController(QObject):
         self._home_poly = QPolygonF()
         self._ortho_cube_poly = QPolygonF()
 
-        # Prebuilt 3D polyhedron parts
+        # Prebuilt 3D cube face parts (only the 6 primary faces; edges and corners removed)
         self._raw_cube_parts: List[Dict[str, Any]] = self._generate_cube_parts()
 
         # Menu actions for synchronization
@@ -151,12 +143,12 @@ class ViewCubeController(QObject):
         return None
 
     def _init_hooks(self) -> None:
-        """Hooks the ViewCube into viewport overlay and event filters."""
+        """Hooks NavOrbit into viewport overlay and event filters."""
         if hasattr(self.app, "add_overlay"):
             try:
                 self.app.add_overlay(self.draw)
             except Exception as e:
-                log.warning(f"Could not register ViewCube overlay: {e}")
+                log.warning(f"Could not register NavOrbit overlay: {e}")
 
         QTimer.singleShot(100, self._install_event_filters)
         self._register_menu_actions()
@@ -171,13 +163,13 @@ class ViewCubeController(QObject):
             win.installEventFilter(self)
 
     def _register_menu_actions(self) -> None:
-        """Adds 'Show Navigation Cube' to Extensions and Camera/View menus."""
+        """Adds 'Show Navigation Orbit' to Extensions and Camera/View menus."""
         if hasattr(self.app, "add_menu_action"):
             try:
                 act = self.app.add_menu_action(
-                    "Show Navigation Cube",
+                    "Show Navigation Orbit",
                     self.toggle,
-                    tip="Toggle the 3D interactive Navigation Cube in the viewport",
+                    tip="Toggle the 3D interactive Navigation Orbit gizmo in the viewport",
                 )
                 if act is not None:
                     act.setCheckable(True)
@@ -193,10 +185,10 @@ class ViewCubeController(QObject):
                 for action in mb.actions():
                     m = action.menu()
                     if m is not None and m.title().strip().lower() in ("camera", "view", "vista", "cámara"):
-                        act_view = QAction("🧭 Navigation Cube", m)
+                        act_view = QAction("🧭 Navigation Orbit", m)
                         act_view.setCheckable(True)
                         act_view.setChecked(self.enabled)
-                        act_view.setToolTip("Toggle 3D interactive ViewCube overlay")
+                        act_view.setToolTip("Toggle 3D interactive NavOrbit overlay")
                         act_view.triggered.connect(self.set_enabled)
                         m.insertAction(m.actions()[0] if m.actions() else None, act_view)
                         self.menu_actions.append(act_view)
@@ -309,18 +301,21 @@ class ViewCubeController(QObject):
                         try:
                             setattr(obj, attr, new_ortho)
                             toggled = True
+                            break
                         except Exception:
                             pass
                 if hasattr(obj, "perspective") and not callable(getattr(obj, "perspective")):
                     try:
                         setattr(obj, "perspective", not new_ortho)
                         toggled = True
+                        break
                     except Exception:
                         pass
                 if hasattr(obj, "projection_mode") and not callable(getattr(obj, "projection_mode")):
                     try:
                         setattr(obj, "projection_mode", "ortho" if new_ortho else "perspective")
                         toggled = True
+                        break
                     except Exception:
                         pass
 
@@ -341,29 +336,16 @@ class ViewCubeController(QObject):
             vp.update()
 
     # ========================================================================
-    # Watertight 26-Part Chamfered Cube Geometry
+    # 6-Face Cube Geometry (Edges & Corners Removed)
     # ========================================================================
 
     def _generate_cube_parts(self) -> List[Dict[str, Any]]:
         """
-        Generates a watertight 3D chamfered cube with:
-        - 6 Octagonal Main Faces
-        - 12 Rectangular Beveled Edges
-        - 8 Hexagonal Corner Caps
+        Generates the 6 full square faces of the 3D cube.
+        Edges and corners are removed as requested.
         """
-        a = self.CHAMFER_A
-        b = self.CHAMFER_B
         parts: List[Dict[str, Any]] = []
 
-        def vec_to_yaw_pitch(d: QVector3D) -> Tuple[float, float]:
-            dn = d.normalized()
-            yaw = math.atan2(dn.y(), dn.x())
-            xy = math.hypot(dn.x(), dn.y())
-            pitch = math.atan2(dn.z(), xy)
-            pitch = max(min(pitch, math.radians(90.0)), math.radians(-90.0))
-            return yaw, pitch
-
-        # 1. 6 Octagonal Main Faces
         face_specs = [
             ("TOP", QVector3D(0, 0, 1), QVector3D(1, 0, 0), QVector3D(0, 1, 0),
              (math.radians(-90.0), math.radians(90.0))),
@@ -379,13 +361,16 @@ class ViewCubeController(QObject):
              (math.radians(180.0), 0.0)),
         ]
 
-        oct_uv = [
-            (-a, -b), (a, -b), (b, -a), (b, a),
-            (a, b), (-a, b), (-b, a), (-b, -a),
+        # Standard clean square face UV vertices (full extent: [-1, 1] x [-1, 1])
+        quad_uv = [
+            (-1.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
         ]
 
         for fname, norm, u_ax, v_ax, f_pose in face_specs:
-            verts = [norm + u_ax * u + v_ax * v for u, v in oct_uv]
+            verts = [norm + u_ax * u + v_ax * v for u, v in quad_uv]
             parts.append({
                 "id": f"FACE_{fname}",
                 "type": "face",
@@ -398,65 +383,6 @@ class ViewCubeController(QObject):
                 "u_ax": u_ax,
                 "v_ax": v_ax,
             })
-
-        # 2. 12 Rectangular Beveled Edges
-        axis_vecs = [
-            ("X", QVector3D(1, 0, 0)),
-            ("NX", QVector3D(-1, 0, 0)),
-            ("Y", QVector3D(0, 1, 0)),
-            ("NY", QVector3D(0, -1, 0)),
-            ("Z", QVector3D(0, 0, 1)),
-            ("NZ", QVector3D(0, 0, -1)),
-        ]
-        for i in range(len(axis_vecs)):
-            for j in range(i + 1, len(axis_vecs)):
-                n1_name, n1 = axis_vecs[i]
-                n2_name, n2 = axis_vecs[j]
-                # Skip opposite faces
-                if abs(QVector3D.dotProduct(n1, n2)) > 0.1:
-                    continue
-                w = QVector3D.crossProduct(n1, n2).normalized()
-                e_verts = [
-                    n1 + n2 * b - w * a,
-                    n1 + n2 * b + w * a,
-                    n1 * b + n2 + w * a,
-                    n1 * b + n2 - w * a,
-                ]
-                e_norm = (n1 + n2).normalized()
-                parts.append({
-                    "id": f"EDGE_{n1_name}_{n2_name}",
-                    "type": "edge",
-                    "face": f"{n1_name}_{n2_name}",
-                    "normal": e_norm,
-                    "target": vec_to_yaw_pitch(e_norm),
-                    "verts": e_verts,
-                    "label": "",
-                    "center": (n1 + n2) * ((1.0 + b) * 0.5),
-                })
-
-        # 3. 8 Hexagonal Corner Caps
-        for sx in (-1.0, 1.0):
-            for sy in (-1.0, 1.0):
-                for sz in (-1.0, 1.0):
-                    c_verts = [
-                        QVector3D(sx * a, sy * b, sz * 1.0),
-                        QVector3D(sx * b, sy * a, sz * 1.0),
-                        QVector3D(sx * 1.0, sy * a, sz * b),
-                        QVector3D(sx * 1.0, sy * b, sz * a),
-                        QVector3D(sx * b, sy * 1.0, sz * a),
-                        QVector3D(sx * a, sy * 1.0, sz * b),
-                    ]
-                    c_norm = QVector3D(sx, sy, sz).normalized()
-                    parts.append({
-                        "id": f"CORNER_{int(sx)}_{int(sy)}_{int(sz)}",
-                        "type": "corner",
-                        "face": "CORNER",
-                        "normal": c_norm,
-                        "target": vec_to_yaw_pitch(c_norm),
-                        "verts": c_verts,
-                        "label": "",
-                        "center": QVector3D(sx, sy, sz) * ((1.0 + a + b) / 3.0),
-                    })
 
         return parts
 
@@ -490,13 +416,13 @@ class ViewCubeController(QObject):
             return QPointF(cx + ev.x() * scale, cy - ev.y() * scale), ev.z()
 
         # --------------------------------------------------------------------
-        # 1. Draw Chamfered 3D Cube (Octagonal Faces, Edges, Hexagonal Corners)
+        # 1. Draw 3D Cube (6 Primary Faces with 3D perspective labels)
         # --------------------------------------------------------------------
         visible_parts: List[Tuple[float, float, Dict[str, Any], QPolygonF]] = []
 
         for p_info in self._raw_cube_parts:
             norm_eye = vm.mapVector(p_info["normal"]).normalized()
-            # Include faces/bevels facing the camera (with slight tolerance for silhouette bevels)
+            # Draw faces facing the camera
             if norm_eye.z() > -0.04:
                 poly_pts: List[QPointF] = []
                 depths: List[float] = []
@@ -507,11 +433,17 @@ class ViewCubeController(QObject):
                 avg_depth = sum(depths) / len(depths)
                 visible_parts.append((avg_depth, norm_eye.z(), p_info, QPolygonF(poly_pts)))
 
-        # Painter's algorithm (back-to-front)
+        # Painter's algorithm (back-to-front by depth)
         visible_parts.sort(key=lambda item: item[0])
         self._current_parts.clear()
 
-        border_pen = QPen(self.COLOR_BORDER, 1.15, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        border_pen = QPen(
+            self.COLOR_BORDER,
+            1.2,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
 
         for avg_depth, nz, p_info, poly in visible_parts:
             p_info["polygon"] = poly
@@ -520,7 +452,6 @@ class ViewCubeController(QObject):
             is_hov = self.hovered_part and self.hovered_part.get("id") == p_info["id"]
             is_press = self.pressed_part and self.pressed_part.get("id") == p_info["id"]
 
-            ptype = p_info["type"]
             shade = max(0.0, min(1.0, nz))
 
             if is_press:
@@ -528,12 +459,7 @@ class ViewCubeController(QObject):
             elif is_hov:
                 fill_color = self.COLOR_HOVER_FILL
             else:
-                if ptype == "face":
-                    val = int(192 + 26 * shade)
-                elif ptype == "edge":
-                    val = int(176 + 22 * shade)
-                else:
-                    val = int(168 + 20 * shade)
+                val = int(192 + 28 * shade)
                 fill_color = QColor(val, val + 2, val + 5, 245)
 
             painter.setBrush(QBrush(fill_color))
@@ -541,19 +467,19 @@ class ViewCubeController(QObject):
             painter.drawPolygon(poly)
 
             # 3D Perspective-Sheared Face Label
-            if ptype == "face" and p_info.get("label") and nz > 0.12:
+            if p_info.get("label") and nz > 0.12:
                 self._draw_sheared_face_label(painter, project, p_info, scale)
 
         # --------------------------------------------------------------------
         # 2. Draw 4 Directional Step Triangles & 2 Curved Ribbon Roll Arrows
         # --------------------------------------------------------------------
         self._control_polys.clear()
-        tri_dist = scale * 1.56
-        tri_half_w = 13.5
-        tri_h = 13.5
+
+        tri_dist = 57.0
+        tri_half_w = 13.0
+        tri_h = 13.0
 
         tri_specs = [
-            # (id, base_center_x, base_center_y, tip_dx, tip_dy, perp_dx, perp_dy)
             ("ARROW_UP", cx, cy - tri_dist, 0.0, -tri_h, tri_half_w, 0.0),
             ("ARROW_DOWN", cx, cy + tri_dist, 0.0, tri_h, tri_half_w, 0.0),
             ("ARROW_LEFT", cx - tri_dist, cy, -tri_h, 0.0, 0.0, tri_half_w),
@@ -570,13 +496,13 @@ class ViewCubeController(QObject):
             self._draw_control_poly(painter, aid, t_poly, border_pen)
 
         # Thick Curved Ribbon Roll Arrows (flanking the Top triangle arrow)
-        roll_r_in = scale * 1.55
-        roll_r_out = scale * 1.79
+        roll_r_in = 56.5
+        roll_r_out = 65.5
         roll_left_poly = self._make_curved_ribbon_arrow(
-            cx, cy, roll_r_in, roll_r_out, start_deg=110.0, end_deg=148.0, head_end_deg=163.0
+            cx, cy, roll_r_in, roll_r_out, start_deg=112.0, end_deg=148.0, head_end_deg=163.0
         )
         roll_right_poly = self._make_curved_ribbon_arrow(
-            cx, cy, roll_r_in, roll_r_out, start_deg=70.0, end_deg=32.0, head_end_deg=17.0
+            cx, cy, roll_r_in, roll_r_out, start_deg=68.0, end_deg=32.0, head_end_deg=17.0
         )
 
         self._control_polys["ROLL_LEFT"] = roll_left_poly
@@ -585,17 +511,17 @@ class ViewCubeController(QObject):
         self._draw_control_poly(painter, "ROLL_RIGHT", roll_right_poly, border_pen)
 
         # --------------------------------------------------------------------
-        # 3. Top-Right Corner Button: Home Icon (replaces the circle button)
+        # 3. Top-Right Corner Button: Home Icon
         # --------------------------------------------------------------------
-        home_cx = cx + scale * 1.52
-        home_cy = cy - scale * 1.54
+        home_cx = cx + 55.0
+        home_cy = cy - 55.0
         self._draw_home_button(painter, home_cx, home_cy, border_pen)
 
         # --------------------------------------------------------------------
         # 4. Bottom-Right Corner Button: Mini Cube (Ortho / Perspective Switch)
         # --------------------------------------------------------------------
-        mini_cx = cx + scale * 1.28
-        mini_cy = cy + scale * 1.32
+        mini_cx = cx + 46.0
+        mini_cy = cy + 48.0
         self._draw_ortho_persp_mini_cube(painter, mini_cx, mini_cy, border_pen)
 
         painter.restore()
@@ -635,7 +561,7 @@ class ViewCubeController(QObject):
         painter.setFont(font)
         painter.setPen(self.COLOR_TEXT)
 
-        box_half = scale * self.CHAMFER_B
+        box_half = scale * 0.95
         text_rect = QRectF(-box_half, -box_half, box_half * 2.0, box_half * 2.0)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, p_info["label"])
         painter.restore()
@@ -650,7 +576,7 @@ class ViewCubeController(QObject):
         end_deg: float,
         head_end_deg: float,
     ) -> QPolygonF:
-        """Builds a thick curved ribbon arrow polygon matching the reference image."""
+        """Builds a thick curved ribbon arrow polygon."""
         pts: List[QPointF] = []
         steps = 14
 
@@ -713,7 +639,6 @@ class ViewCubeController(QObject):
             fill = self.COLOR_BUTTON_FILL
 
         s = 10.5
-        # Single unified house silhouette with roof, chimney, and walls
         house_pts = [
             QPointF(hcx, hcy - s * 0.95),          # Roof peak
             QPointF(hcx + s * 0.35, hcy - s * 0.62),
@@ -748,13 +673,13 @@ class ViewCubeController(QObject):
         """Draws the small bottom-right isometric cube used to switch Ortho / Perspective."""
         is_hov = self.hovered_part and self.hovered_part.get("id") == "ORTHO_PERSP"
         is_press = self.pressed_part and self.pressed_part.get("id") == "ORTHO_PERSP"
+
         is_ortho = self.is_orthographic()
 
-        r = 12.5
+        r = 12.0
         dx = r * 0.866  # cos(30°)
         dy = r * 0.500  # sin(30°)
 
-        # Slight perspective taper when in Perspective mode so the icon reflects current mode
         taper = 1.0 if is_ortho else 0.82
 
         p_center = QPointF(mcx, mcy)
@@ -799,7 +724,7 @@ class ViewCubeController(QObject):
     # ========================================================================
 
     def hit_test(self, mx: float, my: float) -> Optional[Dict[str, Any]]:
-        """Finds which element of the ViewCube is under the cursor."""
+        """Finds which element of NavOrbit is under the cursor."""
         pt = QPointF(mx, my)
 
         # 1. Top-Right Home Button
@@ -829,7 +754,7 @@ class ViewCubeController(QObject):
                     "label": aid.replace("_", " ").title(),
                 }
 
-        # 4. Cube Parts (Faces, Edges, Corners) in Reverse Depth Order (Frontmost first)
+        # 4. Cube Faces in Reverse Depth Order (Frontmost first)
         for p_info in reversed(self._current_parts):
             poly = p_info.get("polygon")
             if poly and poly.containsPoint(pt, Qt.FillRule.OddEvenFill):
@@ -838,7 +763,7 @@ class ViewCubeController(QObject):
         return None
 
     def is_over_widget_area(self, mx: float, my: float) -> bool:
-        """Checks if mouse is within the bounding area of the ViewCube."""
+        """Checks if mouse is within the bounding area of NavOrbit."""
         if not self.enabled:
             return False
         dist = math.hypot(mx - self._center_pos.x(), my - self._center_pos.y())
@@ -897,7 +822,7 @@ class ViewCubeController(QObject):
     # ========================================================================
 
     def _execute_arrow_action(self, action_id: str) -> None:
-        """Executes a 45°/90° step or roll action."""
+        """Executes a 45° step or 90° roll action."""
         cam = self.get_camera()
         if cam is None:
             return
@@ -944,7 +869,7 @@ class ViewCubeController(QObject):
             pos = event.position() if hasattr(event, "position") else event.pos()
             mx, my = float(pos.x()), float(pos.y())
 
-            # Activate free-orbit dragging if mouse moved > 4px while pressed on widget
+            # Activate free-orbit dragging if mouse moved > 4.5px while pressed on widget
             if self._is_mouse_down and not self.is_dragging_cube:
                 if math.hypot(mx - self._press_mouse_pos.x(), my - self._press_mouse_pos.y()) > 4.5:
                     self.is_dragging_cube = True
@@ -1036,7 +961,7 @@ class ViewCubeController(QObject):
                             self.toggle_ortho_perspective()
                         elif ptype == "arrow":
                             self._execute_arrow_action(part.get("action", ""))
-                        elif ptype in ("face", "edge", "corner"):
+                        elif ptype == "face":
                             target = part.get("target")
                             if target:
                                 self.animate_to(target[0], target[1])
@@ -1064,15 +989,19 @@ class ViewCubeController(QObject):
 
 
 # ============================================================================
-# Standalone Plugin Initializer
+# Aliases & Initializers
 # ============================================================================
 
-_VIEWCUBE_CONTROLLER: Optional[ViewCubeController] = None
+ViewCubeController = NavOrbitController
+_NAVORBIT_CONTROLLER: Optional[NavOrbitController] = None
 
 
-def setup_viewcube(app: Any) -> ViewCubeController:
-    """Initializes and returns the ViewCube controller instance."""
-    global _VIEWCUBE_CONTROLLER
-    if _VIEWCUBE_CONTROLLER is None:
-        _VIEWCUBE_CONTROLLER = ViewCubeController(app)
-    return _VIEWCUBE_CONTROLLER
+def setup_navorbit(app: Any) -> NavOrbitController:
+    """Initializes and returns the NavOrbit controller instance."""
+    global _NAVORBIT_CONTROLLER
+    if _NAVORBIT_CONTROLLER is None:
+        _NAVORBIT_CONTROLLER = NavOrbitController(app)
+    return _NAVORBIT_CONTROLLER
+
+
+setup_viewcube = setup_navorbit

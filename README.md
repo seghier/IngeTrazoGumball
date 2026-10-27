@@ -1,11 +1,11 @@
-# IngeTrazo Gumball Manipulator & Navigation Cube (ViewCube)
+# IngeTrazo Gumball Manipulator & Navigation Orbit (NavOrbit)
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)
 [![UI: PySide6](https://img.shields.io/badge/UI-PySide6%20%2F%20Qt6-teal.svg)](https://pypi.org/project/PySide6/)
 [![CAD: IngeTrazo](https://img.shields.io/badge/Platform-IngeTrazo%20CAD-orange.svg)](https://github.com/seghier)
 
-High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://github.com/seghier/ingetrazo), providing a **Rhino 8 / Blender style 3D Gumball Manipulator** and an interactive **Freecad-style Navigation Cube** with zero external dependencies.
+High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://github.com/seghier/ingetrazo), providing a **Rhino 8 / Blender style 3D Gumball Manipulator**, an interactive **3D Navigation Orbit (NavOrbit)** cube, and a **2-Row Viewport Radial Menu** with zero external dependencies.
 
 ---
 
@@ -33,19 +33,14 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 
 ---
 
-### 🧭 2. 3D Navigation Cube (ViewCube)
-* **26 Watertight Clickable Hit Zones**:
-  * **6 Faces**: `TOP`, `BOTTOM`, `FRONT`, `BACK`, `RIGHT`, `LEFT` (snaps to canonical orthogonal/axial views).
-  * **12 Beveled Edges**: Clickable 45° combination angles (e.g. `TOP-FRONT`, `FRONT-RIGHT`).
-  * **8 Corner Caps**: Clickable 35.26° 3D isometric perspectives (e.g. `TOP-FRONT-RIGHT`).
-* **Vibrant Electric Cyan Hover Glow (`#3CA9FF`)**:
-  * Clear visual feedback when hovering over faces, edges, or corners.
-* **Compass Base Ring**:
-  * Circular base disc with world cardinal headings (`N` in red, `S`, `E`, `W`).
-  * Clicking any cardinal letter smoothly aligns your heading.
+### 🧭 2. 3D Navigation Orbit (NavOrbit)
+* **6 Clean Primary Faces**:
+  * **6 Faces**: `TOP`, `BOTTOM`, `FRONT`, `BACK`, `RIGHT`, `LEFT` (snaps cleanly to canonical orthogonal/axial views).
+  * Direct 3D sheared face labels.
+  * Edges and corners removed for an uncluttered, responsive face-focused navigation cube.
 * **Directional Step & Roll Arrows**:
-  * 4 directional step arrows (▲ ▼ ◄ ►) for 90° axial yaw and pitch turns.
-  * 2 curved roll arrows (↺ ↻) for view-plane rolls.
+  * 4 directional step arrows (▲ ▼ ◄ ►) for 45° axial yaw and pitch turns.
+  * 2 curved ribbon roll arrows (↶ ↷) for 90° view-plane rolls.
 * **Home Button (🏠)**:
   * Smoothly glides the camera back to the default isometric view (`iso`).
 * **Perspective / Orthographic Quick Switch**:
@@ -55,8 +50,7 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 * **Smooth 60 FPS Glide Animation**:
   * Cubic ease-out interpolation (`1 - (1 - t)³`) over 220 ms with shortest-angular-path calculation, so camera glides effortlessly without abrupt cuts.
 * **Independent Control**:
-  * Toggle the Navigation Cube on or off independently under **Extensions ▶ Show Navigation Cube** or **Camera ▶ 🧭 Navigation Cube**.
-  * Toggling ViewCube does not affect the Gumball, and vice versa.
+  * Toggle NavOrbit on or off independently under **Extensions ▶ Show Navigation Orbit** or **Camera ▶ 🧭 Navigation Orbit**.
 
 ---
 
@@ -73,8 +67,7 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
   * **Assign Any Existing Command**: Deep inspection of all registered IngeTrazo commands grouped by category with instant search filtering.
   * **Reorder & Resize**: Move slots clockwise/counter-clockwise, add/remove slots (4 to 12 wedges per ring), and customize activation triggers.
 * **Persistent Configuration**:
-  * Automatically saves to 
-adial_menu.json and updates live without requiring an application restart.
+  * Automatically saves to `radial_menu.json` and updates live without requiring an application restart.
 
 ---
 
@@ -86,7 +79,7 @@ adial_menu.json and updates live without requiring an application restart.
    * **Windows**: `%APPDATA%\IngeTrazo\plugins\gumball`
    * **Linux**: `~/.local/share/ingetrazo/plugins/gumball`
    * **macOS**: `~/Library/Application Support/ingetrazo/plugins/gumball`
-3. Restart IngeTrazo or load extensions. The Gumball toolbar button and Navigation Cube will appear automatically!
+3. Restart IngeTrazo or load extensions. The Gumball toolbar button and NavOrbit will appear automatically!
 
 ---
 
@@ -95,11 +88,11 @@ adial_menu.json and updates live without requiring an application restart.
 | Action | Shortcut / Gesture | Description |
 | :--- | :--- | :--- |
 | **Toggle Gumball** | <kbd>Alt</kbd> + <kbd>G</kbd> | Shows or hides the 3D Gumball gizmo |
-| **Toggle ViewCube** | *Extensions ▶ Show Navigation Cube* | Shows or hides the Navigation Cube overlay |
+| **Toggle NavOrbit** | *Extensions ▶ Show Navigation Orbit* | Shows or hides the Navigation Orbit overlay |
 | **Constrain 15° Rotation** | Hold <kbd>Shift</kbd> | Snaps rotation to 15° increments |
 | **Direct Numeric Input** | Click Handle + Type value + <kbd>Enter</kbd> | Precise distance / angle input |
 | **Cancel Entry / Drag** | <kbd>Esc</kbd> | Cancels pending value or reverts live drag |
-| **Orbit via ViewCube** | Left Click + Drag on Cube | Free 3D scene orbit |
+| **Orbit via NavOrbit** | Left Click + Drag on Cube | Free 3D scene orbit |
 | **Return to Home View** | Click Home Icon (🏠) | Glides to default isometric perspective |
 
 ---
@@ -109,7 +102,7 @@ adial_menu.json and updates live without requiring an application restart.
 ```
 IngeTrazoGumball/
 ├── __init__.py          # Gumball manipulator & extension entry point (setup(app))
-├── viewcube.py          # Complete ViewCube module (isolated, pure QPainter)
+├── navorbit.py          # Complete NavOrbit module (isolated, pure QPainter)
 ├── radialmenu.py        # Complete Radial Menu & Settings module (isolated, customizable)
 ├── extension.json       # Plugin manifest metadata
 ├── gumball.png          # High-resolution toolbar icon
