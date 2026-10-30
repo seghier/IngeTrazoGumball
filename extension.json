@@ -1,7 +1,7 @@
 {
   "id": "gumball",
   "name": "Gumball, NavOrbit & Radial Menu",
-  "version": "1.1",
+  "version": "1.2",
   "author": "seghier",
-  "description": "Interactive 3D Gumball transform manipulator, 3D Navigation Orbit (NavOrbit), and customizable double-click Radial Menu for IngeTrazo."
+  "description": "Interactive 3D Gumball transform manipulator, 3D Navigation Orbit (NavOrbit), 3-button toolbar, and customizable theme-aware Radial Pie Menu for IngeTrazo."
 }

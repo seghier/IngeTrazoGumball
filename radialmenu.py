@@ -78,6 +78,33 @@ def _tr(text: str) -> str:
         return text
 
 
+def is_dark_theme() -> bool:
+    """Checks whether the current application theme resolves to dark."""
+    try:
+        from views import theme
+        from PySide6.QtGui import QGuiApplication
+        hints = QGuiApplication.styleHints()
+        scheme = hints.colorScheme() if hasattr(hints, "colorScheme") else None
+        return theme.is_dark(theme.saved_theme(), scheme)
+    except Exception:
+        app = QApplication.instance()
+        if app is not None:
+            return app.palette().color(app.palette().ColorRole.Window).lightness() < 128
+        return True
+
+
+def get_accent_color() -> QColor:
+    """Returns the application accent colour (e.g. IngeTrazo gold-orange)."""
+    try:
+        from views.theme import accent_color
+        col = accent_color()
+        if col is not None and col.isValid():
+            return col
+    except Exception:
+        pass
+    return QColor(243, 115, 41)
+
+
 # ============================================================================
 # Default Radial Menu Profiles (2 Concentric Rows)
 # ============================================================================
@@ -158,13 +185,16 @@ def load_radial_config() -> Dict[str, Any]:
                         data["outer_slots"] = list(DEFAULT_CAD_OUTER_SLOTS)
                 if "outer_slots" not in data:
                     data["outer_slots"] = list(DEFAULT_CAD_OUTER_SLOTS)
+                # Seamlessly upgrade legacy double_click trigger to long_right_click to avoid Edit Group conflicts
+                if data.get("trigger") == "double_click" and not data.get("_custom_double_click", False):
+                    data["trigger"] = "long_right_click"
                 return data
         except Exception as e:
             log.warning(f"Error reading radial menu config: {e}")
     # Return defaults for 2-row layout
     return {
         "enabled": True,
-        "trigger": "double_click",  # "double_click", "middle_click", "right_click", "hotkey"
+        "trigger": "long_right_click",  # "long_right_click", "middle_click", "right_click", "hotkey", "double_click"
         "hotkey": "Tab",
         "radius": 150,
         "mid_radius": 92,
@@ -307,15 +337,6 @@ class RadialMenuWidget(QWidget):
     - Closes cleanly on Esc, right-click, or click outside.
     """
 
-    COLOR_BG_INNER = QColor(20, 24, 34, 245)
-    COLOR_BG_OUTER = QColor(25, 30, 42, 240)
-    COLOR_BORDER_NORMAL = QColor(56, 65, 84, 220)
-    COLOR_BORDER_HOVER = QColor(255, 175, 75, 255)       # IngeTrazo vibrant gold-orange
-    COLOR_CENTER_NORMAL = QColor(16, 19, 27, 248)
-    COLOR_TEXT_NORMAL = QColor(220, 228, 240)
-    COLOR_TEXT_HOVER = QColor(255, 255, 255)
-    COLOR_DIVIDER = QColor(48, 56, 72, 200)
-
     def __init__(self, controller: "RadialMenuController", parent_viewport: QWidget) -> None:
         super().__init__(parent_viewport)
         self.controller = controller
@@ -337,7 +358,39 @@ class RadialMenuWidget(QWidget):
         self.hovered_index: int = -1
         self._center_pt: QPointF = QPointF(175, 175)
         self._action_cache: Dict[str, Optional[QAction]] = {}
+
+        self._update_theme_colors()
         self.hide()
+
+    def _update_theme_colors(self) -> None:
+        """Adapts radial menu color palette dynamically to the current theme."""
+        dark = is_dark_theme()
+        accent = get_accent_color()
+
+        if dark:
+            self.color_bg_inner = QColor(24, 28, 38, 245)
+            self.color_bg_outer = QColor(32, 38, 50, 240)
+            self.color_border_normal = QColor(62, 72, 92, 220)
+            self.color_border_hover = accent
+            self.color_center_normal = QColor(18, 22, 30, 248)
+            self.color_text_normal = QColor(220, 228, 240)
+            self.color_text_hover = QColor(255, 255, 255)
+            self.color_divider = QColor(52, 62, 80, 200)
+            self.color_circle_mid = QColor(70, 82, 106, 230)
+            self.color_circle_inner = QColor(58, 68, 88, 200)
+            self.color_hub_idle = QColor(130, 145, 165)
+        else:
+            self.color_bg_inner = QColor(248, 249, 252, 245)
+            self.color_bg_outer = QColor(236, 240, 246, 240)
+            self.color_border_normal = QColor(185, 194, 208, 220)
+            self.color_border_hover = accent
+            self.color_center_normal = QColor(255, 255, 255, 252)
+            self.color_text_normal = QColor(35, 42, 54)
+            self.color_text_hover = QColor(255, 255, 255)
+            self.color_divider = QColor(195, 204, 218, 200)
+            self.color_circle_mid = QColor(180, 190, 205, 230)
+            self.color_circle_inner = QColor(190, 198, 212, 200)
+            self.color_hub_idle = QColor(100, 112, 128)
 
     def update_config(self, config: Dict[str, Any]) -> None:
         self.inner_slots = list(config.get("inner_slots", DEFAULT_CAD_INNER_SLOTS))
@@ -349,6 +402,7 @@ class RadialMenuWidget(QWidget):
         self.hub_radius = max(24.0, self.inner_radius - 6.0)
 
         self._action_cache.clear()
+        self._update_theme_colors()
         self.update()
 
     def show_at(self, vp_pos: QPoint) -> None:
@@ -356,6 +410,8 @@ class RadialMenuWidget(QWidget):
         vp = self.parentWidget()
         if vp is None:
             return
+
+        self._update_theme_colors()
 
         total_size = int((self.outer_radius + 20) * 2)
         half = total_size // 2
@@ -375,11 +431,21 @@ class RadialMenuWidget(QWidget):
 
     def close_menu(self) -> None:
         QToolTip.hideText()
-        self.releaseMouse()
+        try:
+            self.releaseMouse()
+        except Exception:
+            pass
         self.hide()
         vp = self.parentWidget()
         if vp is not None:
             vp.update()
+
+    def hideEvent(self, event) -> None:
+        try:
+            self.releaseMouse()
+        except Exception:
+            pass
+        super().hideEvent(event)
 
     # ------------------------------------------------------------------------
     # Math & Sector Calculation (Clockwise starting from North)
@@ -418,7 +484,7 @@ class RadialMenuWidget(QWidget):
         if dist < self.inner_radius:
             return (None, -1)
         # Outside radial menu boundary -> cancel / neutral
-        if dist > self.outer_radius + 25.0:
+        if dist > self.outer_radius + 8.0:
             return (None, -1)
 
         # Angle measured clockwise from North (0 rad = North, pi/2 = East, pi = South, 3pi/2 = West)
@@ -474,13 +540,32 @@ class RadialMenuWidget(QWidget):
             self.update()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._execute_hovered_or_close()
-        elif event.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+        pos = event.position() if hasattr(event, "position") else event.pos()
+        ring, idx = self._get_hovered_slot_at(pos.x(), pos.y())
+        slot = self._get_slot(ring, idx)
+
+        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            if slot is not None:
+                self.close_menu()
+                self.controller.trigger_slot_action(slot)
+            else:
+                self.close_menu()
+            event.accept()
+        elif event.button() == Qt.MouseButton.MiddleButton:
             self.close_menu()
+            event.accept()
+        else:
+            self.close_menu()
+            event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
-        pass
+        # Keep the radial menu visible after releasing the initial hold trigger.
+        # It remains open until the user clicks anywhere on the canvas or picks a slot.
+        event.accept()
+
+    def contextMenuEvent(self, event) -> None:
+        # Suppress context menu while radial menu is active
+        event.accept()
 
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Space):
@@ -502,6 +587,8 @@ class RadialMenuWidget(QWidget):
     # ------------------------------------------------------------------------
 
     def paintEvent(self, event) -> None:
+        self._update_theme_colors()
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
@@ -513,6 +600,8 @@ class RadialMenuWidget(QWidget):
         n_inner = len(self.inner_slots)
         if n_outer == 0 and n_inner == 0:
             return
+
+        dark = is_dark_theme()
 
         # --------------------------------------------------------------------
         # 1. Draw Outer Ring Wedges (Row 2)
@@ -528,13 +617,14 @@ class RadialMenuWidget(QWidget):
 
                 if is_hover:
                     grad = QLinearGradient(cx, cy, cx + r_out * math.sin(i * step_out), cy - r_out * math.cos(i * step_out))
-                    grad.setColorAt(0.0, QColor(240, 105, 30, 235))
-                    grad.setColorAt(1.0, QColor(255, 140, 50, 245))
+                    acc = self.color_border_hover
+                    grad.setColorAt(0.0, acc.darker(110) if not dark else acc.darker(105))
+                    grad.setColorAt(1.0, acc.lighter(115))
                     painter.setBrush(QBrush(grad))
-                    painter.setPen(QPen(self.COLOR_BORDER_HOVER, 2.2))
+                    painter.setPen(QPen(self.color_border_hover, 2.2))
                 else:
-                    painter.setBrush(QBrush(self.COLOR_BG_OUTER))
-                    painter.setPen(QPen(self.COLOR_BORDER_NORMAL, 1.2))
+                    painter.setBrush(QBrush(self.color_bg_outer))
+                    painter.setPen(QPen(self.color_border_normal, 1.2))
 
                 painter.drawPolygon(poly)
 
@@ -553,7 +643,7 @@ class RadialMenuWidget(QWidget):
                     painter.drawPixmap(int(ix - icon_size / 2), int(iy - icon_size / 2), pm)
                 else:
                     painter.setFont(QFont("Segoe UI", 13 if is_hover else 11, QFont.Weight.Bold))
-                    painter.setPen(QPen(self.COLOR_TEXT_HOVER if is_hover else self.COLOR_TEXT_NORMAL))
+                    painter.setPen(QPen(self.color_text_hover if is_hover else self.color_text_normal))
                     initial = slot.get("name", "•")[:2].upper()
                     painter.drawText(QRectF(ix - 16, iy - 16, 32, 32), Qt.AlignmentFlag.AlignCenter, initial)
 
@@ -571,13 +661,14 @@ class RadialMenuWidget(QWidget):
 
                 if is_hover:
                     grad = QLinearGradient(cx, cy, cx + r_out * math.sin(i * step_in), cy - r_out * math.cos(i * step_in))
-                    grad.setColorAt(0.0, QColor(240, 105, 30, 235))
-                    grad.setColorAt(1.0, QColor(255, 140, 50, 245))
+                    acc = self.color_border_hover
+                    grad.setColorAt(0.0, acc.darker(110) if not dark else acc.darker(105))
+                    grad.setColorAt(1.0, acc.lighter(115))
                     painter.setBrush(QBrush(grad))
-                    painter.setPen(QPen(self.COLOR_BORDER_HOVER, 2.2))
+                    painter.setPen(QPen(self.color_border_hover, 2.2))
                 else:
-                    painter.setBrush(QBrush(self.COLOR_BG_INNER))
-                    painter.setPen(QPen(self.COLOR_BORDER_NORMAL, 1.2))
+                    painter.setBrush(QBrush(self.color_bg_inner))
+                    painter.setPen(QPen(self.color_border_normal, 1.2))
 
                 painter.drawPolygon(poly)
 
@@ -596,14 +687,14 @@ class RadialMenuWidget(QWidget):
                     painter.drawPixmap(int(ix - icon_size / 2), int(iy - icon_size / 2), pm)
                 else:
                     painter.setFont(QFont("Segoe UI", 13 if is_hover else 11, QFont.Weight.Bold))
-                    painter.setPen(QPen(self.COLOR_TEXT_HOVER if is_hover else self.COLOR_TEXT_NORMAL))
+                    painter.setPen(QPen(self.color_text_hover if is_hover else self.color_text_normal))
                     initial = slot.get("name", "•")[:2].upper()
                     painter.drawText(QRectF(ix - 16, iy - 16, 32, 32), Qt.AlignmentFlag.AlignCenter, initial)
 
         # --------------------------------------------------------------------
         # 3. Draw Radial Dividers
         # --------------------------------------------------------------------
-        painter.setPen(QPen(self.COLOR_DIVIDER, 1.2))
+        painter.setPen(QPen(self.color_divider, 1.2))
 
         # Outer dividers
         if n_outer > 0:
@@ -629,19 +720,19 @@ class RadialMenuWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
         # Mid divider circle (Row 1 / Row 2 separator)
-        painter.setPen(QPen(QColor(68, 78, 102, 230), 1.6))
+        painter.setPen(QPen(self.color_circle_mid, 1.6))
         painter.drawEllipse(self._center_pt, self.mid_radius, self.mid_radius)
 
         # Inner boundary circle
-        painter.setPen(QPen(QColor(56, 65, 84, 200), 1.2))
+        painter.setPen(QPen(self.color_circle_inner, 1.2))
         painter.drawEllipse(self._center_pt, self.inner_radius, self.inner_radius)
 
         # --------------------------------------------------------------------
         # 5. Draw Center Hub
         # --------------------------------------------------------------------
         is_hub_active = (self.hovered_ring is not None and self.hovered_index >= 0)
-        painter.setPen(QPen(self.COLOR_BORDER_HOVER if is_hub_active else self.COLOR_BORDER_NORMAL, 2.0 if is_hub_active else 1.2))
-        painter.setBrush(QBrush(self.COLOR_CENTER_NORMAL))
+        painter.setPen(QPen(self.color_border_hover if is_hub_active else self.color_border_normal, 2.0 if is_hub_active else 1.2))
+        painter.setBrush(QBrush(self.color_center_normal))
         painter.drawEllipse(self._center_pt, self.hub_radius, self.hub_radius)
 
         if is_hub_active:
@@ -654,12 +745,12 @@ class RadialMenuWidget(QWidget):
                     painter.drawPixmap(int(cx - 11), int(cy - 11), pm)
                 else:
                     painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-                    painter.setPen(QPen(self.COLOR_TEXT_HOVER))
+                    painter.setPen(QPen(self.color_text_hover))
                     initial = hov_slot.get("name", "•")[:1].upper()
                     painter.drawText(QRectF(cx - 15, cy - 15, 30, 30), Qt.AlignmentFlag.AlignCenter, initial)
         else:
             painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Normal))
-            painter.setPen(QPen(QColor(130, 145, 165)))
+            painter.setPen(QPen(self.color_hub_idle))
             painter.drawText(QRectF(cx - 20, cy - 12, 40, 24), Qt.AlignmentFlag.AlignCenter, "✕")
 
 
@@ -944,11 +1035,12 @@ class RadialMenuSettingsDialog(QDialog):
         top_lay.addRow("", self.chk_enabled)
 
         self.cmb_trigger = QComboBox()
-        self.cmb_trigger.addItem(_tr("Left Double-Click (Default)"), "double_click")
+        self.cmb_trigger.addItem(_tr("Long Right Click (Hold ~350ms - Recommended)"), "long_right_click")
         self.cmb_trigger.addItem(_tr("Middle Mouse Button"), "middle_click")
         self.cmb_trigger.addItem(_tr("Right Mouse Button"), "right_click")
         self.cmb_trigger.addItem(_tr("Hotkey (Keyboard)"), "hotkey")
-        cur_trig = self.controller.config.get("trigger", "double_click")
+        self.cmb_trigger.addItem(_tr("Left Double-Click (May conflict with Edit Group)"), "double_click")
+        cur_trig = self.controller.config.get("trigger", "long_right_click")
         idx = self.cmb_trigger.findData(cur_trig)
         if idx >= 0:
             self.cmb_trigger.setCurrentIndex(idx)
@@ -1166,14 +1258,16 @@ class RadialMenuSettingsDialog(QDialog):
         if reply == QMessageBox.StandardButton.Yes:
             self.current_inner_slots = list(DEFAULT_CAD_INNER_SLOTS)
             self.current_outer_slots = list(DEFAULT_CAD_OUTER_SLOTS)
-            self.cmb_trigger.setCurrentIndex(self.cmb_trigger.findData("double_click"))
+            self.cmb_trigger.setCurrentIndex(self.cmb_trigger.findData("long_right_click"))
             self.chk_enabled.setChecked(True)
             self._populate_all_tables()
 
     def _save_and_apply(self) -> None:
+        trig = self.cmb_trigger.currentData()
         cfg = {
             "enabled": self.chk_enabled.isChecked(),
-            "trigger": self.cmb_trigger.currentData(),
+            "trigger": trig,
+            "_custom_double_click": (trig == "double_click"),
             "hotkey": self.edit_hotkey.text().strip(),
             "radius": self.controller.config.get("radius", 150),
             "mid_radius": self.controller.config.get("mid_radius", 92),
@@ -1206,9 +1300,26 @@ class RadialMenuController(QObject):
         self.radial_widget: Optional[RadialMenuWidget] = None
         self._all_commands: List[CommandItem] = []
         self._menu_actions: List[QAction] = []
+        self.toolbar_action: Optional[QAction] = None
+
+        # Long right click gesture tracking
+        self._long_right_timer = QTimer(self)
+        self._long_right_timer.setSingleShot(True)
+        self._long_right_timer.setInterval(350)
+        self._long_right_timer.timeout.connect(self._on_long_right_timeout)
+        self._right_press_pos: Optional[QPoint] = None
+        self._long_right_activated: bool = False
 
         self._hook_viewport()
         self._register_menu_items()
+
+    def set_enabled(self, val: bool) -> None:
+        self.config["enabled"] = bool(val)
+        save_radial_config(self.config)
+        self.apply_config(self.config)
+
+    def toggle(self) -> None:
+        self.set_enabled(not self.config.get("enabled", True))
 
     def get_viewport(self) -> Any:
         return getattr(self.app, "viewport", None) or getattr(self.app, "_viewport", None)
@@ -1228,11 +1339,16 @@ class RadialMenuController(QObject):
         self.config = cfg
         if self.radial_widget is not None:
             self.radial_widget.update_config(cfg)
+        enabled = cfg.get("enabled", True)
         for act in self._menu_actions:
             if hasattr(act, "setChecked"):
                 act.blockSignals(True)
-                act.setChecked(cfg.get("enabled", True))
+                act.setChecked(enabled)
                 act.blockSignals(False)
+        if self.toolbar_action is not None and hasattr(self.toolbar_action, "setChecked"):
+            self.toolbar_action.blockSignals(True)
+            self.toolbar_action.setChecked(enabled)
+            self.toolbar_action.blockSignals(False)
 
     def _hook_viewport(self) -> None:
         vp = self.get_viewport()
@@ -1253,17 +1369,15 @@ class RadialMenuController(QObject):
         title = "⭕ Radial Menu Settings..."
         if hasattr(self.app, "add_menu_action"):
             try:
-                act = self.app.add_menu_action("Extensions", title, self.open_settings)
+                act = self.app.add_menu_action(
+                    title,
+                    self.open_settings,
+                    tip="Configure the 2-row radial pie menu",
+                )
                 if act is not None:
                     self._menu_actions.append(act)
-            except Exception:
-                pass
-            try:
-                act2 = self.app.add_menu_action("Tools", title, self.open_settings)
-                if act2 is not None:
-                    self._menu_actions.append(act2)
-            except Exception:
-                pass
+            except Exception as me:
+                log.warning(f"Failed to register Radial Menu action: {me}")
 
         win = self.get_window()
         if win is not None and hasattr(win, "menuBar") and win.menuBar():
@@ -1309,6 +1423,16 @@ class RadialMenuController(QObject):
     # Event Filter (Double-Click & Trigger Detection)
     # ------------------------------------------------------------------------
 
+    def _on_long_right_timeout(self) -> None:
+        if not self.config.get("enabled", True):
+            return
+        vp = self.get_viewport()
+        if vp is None or self._right_press_pos is None:
+            return
+        self._long_right_activated = True
+        menu = self.get_radial_widget()
+        menu.show_at(self._right_press_pos)
+
     def eventFilter(self, obj: Any, event: QEvent) -> bool:
         if not self.config.get("enabled", True):
             return False
@@ -1318,10 +1442,56 @@ class RadialMenuController(QObject):
             return False
 
         etype = event.type()
-        trigger_mode = self.config.get("trigger", "double_click")
 
-        # 1. Left Double-Click Trigger
-        if trigger_mode == "double_click" and etype == QEvent.Type.MouseButtonDblClick:
+        # If radial menu is currently open, any canvas click closes it
+        menu = getattr(self, "_widget", None)
+        if menu is not None and menu.isVisible():
+            if etype in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+                menu.close_menu()
+                event.accept()
+                return True
+            elif etype == QEvent.Type.ContextMenu:
+                event.accept()
+                return True
+
+        trigger_mode = self.config.get("trigger", "long_right_click")
+
+        # 1. Long Right Click Trigger (Hold ~350ms - avoids conflict with Edit Group double-click)
+        if trigger_mode == "long_right_click":
+            if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                self._right_press_pos = pos
+                self._long_right_activated = False
+                self._long_right_timer.start(350)
+                # Let viewport receive press for navigation/selection setup
+                return False
+
+            elif etype == QEvent.Type.MouseMove:
+                if self._long_right_timer.isActive() and self._right_press_pos is not None:
+                    pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                    if (pos - self._right_press_pos).manhattanLength() > 6:
+                        # User is dragging / panning / orbiting -> abort long click
+                        self._long_right_timer.stop()
+                        self._right_press_pos = None
+
+            elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
+                if self._long_right_timer.isActive():
+                    self._long_right_timer.stop()
+                    self._right_press_pos = None
+                if self._long_right_activated:
+                    self._long_right_activated = False
+                    self._right_press_pos = None
+                    event.accept()
+                    return True
+
+            elif etype == QEvent.Type.ContextMenu:
+                if self._long_right_activated or (menu is not None and menu.isVisible()):
+                    self._long_right_activated = False
+                    event.accept()
+                    return True
+
+        # 2. Left Double-Click Trigger (Optional / Legacy)
+        elif trigger_mode == "double_click" and etype == QEvent.Type.MouseButtonDblClick:
             if event.button() == Qt.MouseButton.LeftButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 menu = self.get_radial_widget()
@@ -1329,7 +1499,7 @@ class RadialMenuController(QObject):
                 event.accept()
                 return True
 
-        # 2. Middle Click Trigger
+        # 3. Middle Click Trigger
         elif trigger_mode == "middle_click" and etype == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.MiddleButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
@@ -1338,7 +1508,7 @@ class RadialMenuController(QObject):
                 event.accept()
                 return True
 
-        # 3. Right Click Trigger
+        # 4. Quick Right Click Trigger
         elif trigger_mode == "right_click" and etype == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.RightButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
@@ -1347,7 +1517,7 @@ class RadialMenuController(QObject):
                 event.accept()
                 return True
 
-        # 4. Hotkey Trigger
+        # 5. Hotkey Trigger
         elif trigger_mode == "hotkey" and etype == QEvent.Type.KeyPress:
             hotkey_str = self.config.get("hotkey", "Tab").strip()
             seq = QKeySequence(hotkey_str)

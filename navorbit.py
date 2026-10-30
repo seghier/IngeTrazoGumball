@@ -91,8 +91,9 @@ class NavOrbitController(QObject):
         # Prebuilt 3D cube face parts (only the 6 primary faces; edges and corners removed)
         self._raw_cube_parts: List[Dict[str, Any]] = self._generate_cube_parts()
 
-        # Menu actions for synchronization
+        # Menu & toolbar actions for synchronization
         self.menu_actions: List[QAction] = []
+        self.toolbar_action: Optional[QAction] = None
 
         # Smooth glide camera animation
         self._anim_timer = QTimer(self)
@@ -210,6 +211,11 @@ class NavOrbitController(QObject):
             act.blockSignals(True)
             act.setChecked(self.enabled)
             act.blockSignals(False)
+
+        if self.toolbar_action is not None and hasattr(self.toolbar_action, "setChecked"):
+            self.toolbar_action.blockSignals(True)
+            self.toolbar_action.setChecked(self.enabled)
+            self.toolbar_action.blockSignals(False)
 
         vp = self.get_viewport()
         if vp is not None:

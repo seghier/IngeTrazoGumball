@@ -50,7 +50,7 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 * **Smooth 60 FPS Glide Animation**:
   * Cubic ease-out interpolation (`1 - (1 - t)³`) over 220 ms with shortest-angular-path calculation, so camera glides effortlessly without abrupt cuts.
 * **Independent Control**:
-  * Toggle NavOrbit on or off independently under **Extensions ▶ Show Navigation Orbit** or **Camera ▶ 🧭 Navigation Orbit**.
+  * Toggle NavOrbit on or off via the dedicated **View Cube toolbar button**, under **Extensions ▶ Show Navigation Orbit**, or **Camera ▶ 🧭 Navigation Orbit**.
 
 ---
 
@@ -58,8 +58,12 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 * **Two Concentric Tiers / Rows (16 Quick-Access CAD Tools)**:
   * **Inner Row (Row 1)**: 8 fast-flick primary tools closest to cursor: **Select** (Space), **Line** (L), **Push / Pull** (P), **Rectangle** (R), **Move** (M), **Rotate** (Q), **Undo** (Ctrl+Z), **Eraser** (E).
   * **Outer Row (Row 2)**: 8 extended CAD tools in the outer concentric ring: **Tape Measure** (T), **Circle** (C), **Offset** (F), **Arc** (A), **Scale** (S), **Follow Me**, **Redo** (Ctrl+Y), **Paint Bucket** (B).
-* **Direct In-Viewport Double-Click Activation**:
-  * Double-click anywhere in the 3D viewport (or use middle click, right click, or hotkey) to instantly spawn the 2-row radial menu centered under your cursor.
+* **Long Right Click Activation Gesture**:
+  * Press and hold the **Right Mouse Button (~350 ms)** to summon the Pie Menu centered under the cursor. This eliminates interference with IngeTrazo's native **double-click to enter/edit groups**!
+  * Also supports fast marking flick: drag to tool and release right button to instantly trigger.
+  * Configurable triggers in settings: Long Right Click (recommended), Middle Click, Right Click, Hotkey (Tab), or Double-Click.
+* **Theme-Aware Color Palette**:
+  * Dynamically adapts background, rings, borders, and text to match IngeTrazo's active theme (Dark / Light / System) and custom accent color rather than hardcoded black.
 * **Instant Native Tooltips & Live Center Hub**:
   * Hovering towards any wedge in either row illuminates the sector in vibrant IngeTrazo gold-orange, shows an instant tooltip with command name & shortcut, and previews the icon in the center hub.
 * **Full In-App Customization Dialog**:
@@ -71,6 +75,17 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 
 ---
 
+### 🛠️ 4. Unified 3-Button Navigation & Manipulator Toolbar
+* **3 Dedicated Actions**:
+  * 🧊 **View Cube**: Instant toggle for 3D NavOrbit orientation gizmo.
+  * 🎯 **Gumball**: Instant toggle for 3D Gumball transform gizmo.
+  * ⭕ **Pie Menu**: Instant toggle for 2-row Radial Menu.
+* **Theme-Aware Icons**:
+  * Reverts and inverts `navcube` and `radial` icons for dark theme so they read crisp and high-contrast on both dark and light chrome.
+  * Live theme change detection updates button icons and styles without application restart.
+
+---
+
 ## 🚀 Installation
 
 ### Easy Install (Folder Copy)
@@ -79,7 +94,7 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
    * **Windows**: `%APPDATA%\IngeTrazo\plugins\gumball`
    * **Linux**: `~/.local/share/ingetrazo/plugins/gumball`
    * **macOS**: `~/Library/Application Support/ingetrazo/plugins/gumball`
-3. Restart IngeTrazo or load extensions. The Gumball toolbar button and NavOrbit will appear automatically!
+3. Restart IngeTrazo or load extensions. The 3-button toolbar and NavOrbit will appear automatically!
 
 ---
 
@@ -87,8 +102,10 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 
 | Action | Shortcut / Gesture | Description |
 | :--- | :--- | :--- |
-| **Toggle Gumball** | <kbd>Alt</kbd> + <kbd>G</kbd> | Shows or hides the 3D Gumball gizmo |
-| **Toggle NavOrbit** | *Extensions ▶ Show Navigation Orbit* | Shows or hides the Navigation Orbit overlay |
+| **Toggle View Cube** | Toolbar Button / *Extensions ▶ Show Navigation Orbit* | Shows or hides the 3D NavOrbit overlay |
+| **Toggle Gumball** | Toolbar Button / <kbd>Alt</kbd> + <kbd>G</kbd> | Shows or hides the 3D Gumball gizmo |
+| **Toggle Pie Menu** | Toolbar Button / *Extensions ▶ ⭕ Radial Menu Settings* | Enables or disables the Viewport Radial Menu |
+| **Open Pie Menu** | **Hold Right Click (~350ms)** | Spawns 2-row Pie Menu (leaves double-click free for Edit Group) |
 | **Constrain 15° Rotation** | Hold <kbd>Shift</kbd> | Snaps rotation to 15° increments |
 | **Direct Numeric Input** | Click Handle + Type value + <kbd>Enter</kbd> | Precise distance / angle input |
 | **Cancel Entry / Drag** | <kbd>Esc</kbd> | Cancels pending value or reverts live drag |
@@ -101,11 +118,14 @@ High-performance 3D viewport interaction suite for [IngeTrazo CAD](https://githu
 
 ```
 IngeTrazoGumball/
-├── __init__.py          # Gumball manipulator & extension entry point (setup(app))
+├── __init__.py          # 3-button toolbar, theme listeners, Gumball controller & setup(app)
 ├── navorbit.py          # Complete NavOrbit module (isolated, pure QPainter)
-├── radialmenu.py        # Complete Radial Menu & Settings module (isolated, customizable)
+├── radialmenu.py        # Theme-aware 2-row Radial Menu & long-right-click gestures
+├── icons/               # Multi-size toolbar icons
+│   ├── dark/            # Inverted/reverted high-contrast icons for dark theme
+│   └── light/           # Native icons for light theme
 ├── extension.json       # Plugin manifest metadata
-├── gumball.png          # High-resolution toolbar icon
+├── gumball.png          # High-resolution root fallback icon
 ```
 
 * **Zero Heavy C++ / OpenGL Dependencies**: Built with pure PySide6 vector projection and antialiased `QPainter` overlay rendering.

@@ -2,13 +2,13 @@
 # Copy this file to extensions/gumball.toml in https://github.com/ingelibre/ingetrazo-extensions
 
 id = "gumball"
-version = "1.1"
+version = "1.2"
 author = "seghier"
 author_url = "https://github.com/seghier"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/seghier/IngeTrazoGumball"
-download = "https://github.com/seghier/IngeTrazoGumball/releases/download/v1.1/gumball.zip"
-sha256 = "10831a990d2d3ca333e31ea8e5dff75012ae4401a243d65286a32ab1269be362"
+download = "https://github.com/seghier/IngeTrazoGumball/releases/download/v1.2/gumball.zip"
+sha256 = "60e2eaa76881dc018355a0a06cad606a64e11ae699165267e58f6d7e9371dd63"
 ingetrazo = "0.5.7"
 tags = ["productivity", "drawing"]
 

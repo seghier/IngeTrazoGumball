@@ -20,6 +20,7 @@ Interactive 3D transform gizmo (Rhino 8 / Blender style) featuring:
 from __future__ import annotations
 import math
 import os
+import sys
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,10 +31,12 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QIcon,
+    QImage,
     QMatrix4x4,
     QPainter,
     QPainterPath,
     QPen,
+    QPixmap,
     QPolygonF,
     QVector3D,
 )
@@ -2138,15 +2141,143 @@ class GumballController(QObject):
 
 _GUMBALL_CONTROLLER: Optional[GumballController] = None
 
-def setup(app: Any) -> None:
-    """Extension initialization called by IngeTrazo's core.extensions loader."""
-    global _GUMBALL_CONTROLLER
+
+def is_dark_theme() -> bool:
+    """Checks whether the current application theme resolves to dark."""
+    try:
+        from views import theme
+        from PySide6.QtGui import QGuiApplication
+        hints = QGuiApplication.styleHints()
+        scheme = hints.colorScheme() if hasattr(hints, "colorScheme") else None
+        return theme.is_dark(theme.saved_theme(), scheme)
+    except Exception:
+        app = QApplication.instance()
+        if app is not None:
+            return app.palette().color(app.palette().ColorRole.Window).lightness() < 128
+        return True
+
+
+def get_toolbar_icon(name: str, is_dark: bool) -> QIcon:
+    """
+    Constructs a theme-aware QIcon for toolbar actions with multi-size resolution.
+    Reverts (inverts) navcube and radial icons for dark theme as requested.
+    """
+    root_dir = os.path.dirname(__file__)
+    icons_dir = os.path.join(root_dir, "icons")
+    theme_sub = "dark" if is_dark else "light"
+
+    icon = QIcon()
+    sizes = [24, 32, 48, 64]
+
+    if name == "gumball":
+        for p in (
+            os.path.join(icons_dir, theme_sub, "gumball.png"),
+            os.path.join(icons_dir, "gumball.png"),
+            os.path.join(root_dir, "gumball.png"),
+        ):
+            if os.path.exists(p):
+                return QIcon(p)
+        return icon
+
+    variants = [name]
+    if name == "radial":
+        variants.append("rradial")
+
+    added_any = False
+    for sz in sizes:
+        found_path = None
+        for v in variants:
+            cands = [
+                os.path.join(icons_dir, theme_sub, f"{v}_{sz}x{sz}.png"),
+                os.path.join(icons_dir, f"{v}_{sz}x{sz}.png"),
+            ]
+            for c in cands:
+                if os.path.exists(c):
+                    found_path = c
+                    break
+            if found_path:
+                break
+
+        if found_path and os.path.exists(found_path):
+            pix = QPixmap(found_path)
+            if is_dark and theme_sub not in found_path:
+                img = pix.toImage()
+                img.invertPixels(QImage.InvertMode.InvertRgb)
+                pix = QPixmap.fromImage(img)
+            icon.addPixmap(pix)
+            added_any = True
+
+    if not added_any:
+        for v in variants:
+            for p in (
+                os.path.join(icons_dir, theme_sub, f"{v}.png"),
+                os.path.join(icons_dir, f"{v}.png"),
+            ):
+                if os.path.exists(p):
+                    pix = QPixmap(p)
+                    if is_dark and theme_sub not in p:
+                        img = pix.toImage()
+                        img.invertPixels(QImage.InvertMode.InvertRgb)
+                        pix = QPixmap.fromImage(img)
+                    icon.addPixmap(pix)
+                    break
+
+    return icon
+
+
+def apply_toolbar_button_style(btn, is_dark: bool) -> None:
+    if btn is None:
+        return
+    if is_dark:
+        btn.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                margin: 0px;
+                padding: 1px;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+            }
+            QToolButton:checked {
+                background: #233b2c;
+                border: 1px solid #48b870;
+            }
+            QToolButton:checked:hover {
+                background: #294734;
+                border: 1px solid #58cf84;
+            }
+        """)
+    else:
+        btn.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                margin: 0px;
+                padding: 1px;
+            }
+            QToolButton:hover {
+                background: rgba(0, 0, 0, 0.06);
+                border: 1px solid rgba(0, 0, 0, 0.12);
+            }
+            QToolButton:checked {
+                background: #d4ebd8;
+                border: 1px solid #389e5a;
+            }
+            QToolButton:checked:hover {
+                background: #c3e5c9;
+                border: 1px solid #2e8b4e;
+            }
+        """)
+
+
+def init(app: Any) -> None:
+    """Extension initialization entry point called by IngeTrazo."""
     try:
         controller = GumballController(app)
-        _GUMBALL_CONTROLLER = controller
-
-        import sys
-        sys.modules["gumball"] = sys.modules[__name__]
         sys.modules["IngeTrazoGumball"] = sys.modules[__name__]
         if hasattr(app, "__dict__"):
             app._gumball_controller = controller
@@ -2159,9 +2290,23 @@ def setup(app: Any) -> None:
         if qapp:
             qapp._gumball_controller = controller
 
-        icon_path = os.path.join(os.path.dirname(__file__), "gumball.png")
-        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+        # 1. Initialize separated Navigation Orbit (NavOrbit) module
+        nav_controller = None
+        try:
+            from .navorbit import setup_navorbit
+            nav_controller = setup_navorbit(app)
+        except Exception as no_ex:
+            log.warning(f"Failed to initialize NavOrbit: {no_ex}")
 
+        # 2. Initialize separated Radial Menu (Pie Menu) module
+        radial_controller = None
+        try:
+            from .radialmenu import setup_radial_menu
+            radial_controller = setup_radial_menu(app)
+        except Exception as rm_ex:
+            log.warning(f"Failed to initialize Radial Menu: {rm_ex}")
+
+        # 3. Create or hook Toolbar with 3 Buttons: View Cube, Gumball, Pie Menu
         if win and hasattr(win, "addToolBar"):
             try:
                 tb = getattr(win, "_gumball_toolbar", None)
@@ -2180,72 +2325,103 @@ def setup(app: Any) -> None:
                             pass
                     win._gumball_toolbar = tb
 
-                act = getattr(win, "_gumball_action", None)
-                if act is None:
-                    act = tb.addAction(icon, "Gumball")
-                    act.setCheckable(True)
-                    act.setChecked(True)
-                    act.setToolTip("Toggle 3D Gumball Manipulator (Alt+G)")
-                    act.triggered.connect(controller.set_enabled)
-                    win._gumball_action = act
+                is_dark = is_dark_theme()
 
-                controller.toolbar_action = act
+                # Button 1: View Cube (NavOrbit)
+                act_navcube = getattr(win, "_navcube_action", None)
+                if act_navcube is None and nav_controller is not None:
+                    act_navcube = tb.addAction(get_toolbar_icon("navcube", is_dark), "View Cube")
+                    act_navcube.setObjectName("action_toggle_navcube")
+                    act_navcube.setCheckable(True)
+                    act_navcube.setChecked(nav_controller.enabled)
+                    act_navcube.setToolTip("Toggle 3D View Cube / NavOrbit")
+                    act_navcube.triggered.connect(nav_controller.set_enabled)
+                    win._navcube_action = act_navcube
+                    nav_controller.toolbar_action = act_navcube
+                    if act_navcube not in nav_controller.menu_actions:
+                        nav_controller.menu_actions.append(act_navcube)
+                elif act_navcube is not None and nav_controller is not None:
+                    nav_controller.toolbar_action = act_navcube
 
-                btn = tb.widgetForAction(act)
-                if btn is not None:
-                    btn.setStyleSheet("""
-                        QToolButton {
-                            background: transparent;
-                            border: 1px solid transparent;
-                            border-radius: 3px;
-                            margin: 0px;
-                            padding: 1px;
-                        }
-                        QToolButton:hover {
-                            background: rgba(255, 255, 255, 0.08);
-                            border: 1px solid rgba(255, 255, 255, 0.15);
-                        }
-                        QToolButton:checked {
-                            background: #233b2c;
-                            border: 1px solid #48b870;
-                        }
-                        QToolButton:checked:hover {
-                            background: #294734;
-                            border: 1px solid #58cf84;
-                        }
-                    """)
-            except Exception:
-                pass
+                # Button 2: Gumball Manipulator
+                act_gumball = getattr(win, "_gumball_action", None)
+                if act_gumball is None:
+                    act_gumball = tb.addAction(get_toolbar_icon("gumball", is_dark), "Gumball")
+                    act_gumball.setObjectName("action_toggle_gumball")
+                    act_gumball.setCheckable(True)
+                    act_gumball.setChecked(controller.enabled)
+                    act_gumball.setToolTip("Toggle 3D Gumball Manipulator (Alt+G)")
+                    act_gumball.triggered.connect(controller.set_enabled)
+                    win._gumball_action = act_gumball
+                controller.toolbar_action = act_gumball
 
+                # Button 3: Pie Menu (Radial Menu)
+                act_radial = getattr(win, "_radial_action", None)
+                if act_radial is None and radial_controller is not None:
+                    act_radial = tb.addAction(get_toolbar_icon("radial", is_dark), "Pie Menu")
+                    act_radial.setObjectName("action_toggle_pie_menu")
+                    act_radial.setCheckable(True)
+                    act_radial.setChecked(radial_controller.config.get("enabled", True))
+                    act_radial.setToolTip("Toggle Radial Pie Menu (Hold Right Click)")
+                    act_radial.triggered.connect(radial_controller.set_enabled)
+                    win._radial_action = act_radial
+                    radial_controller.toolbar_action = act_radial
+                elif act_radial is not None and radial_controller is not None:
+                    radial_controller.toolbar_action = act_radial
+
+                # Style all 3 buttons
+                actions_to_style = [a for a in (act_navcube, act_gumball, act_radial) if a is not None]
+                for act in actions_to_style:
+                    btn = tb.widgetForAction(act)
+                    apply_toolbar_button_style(btn, is_dark)
+
+                # Live theme change listener on main window
+                class _ThemeChangeListener(QObject):
+                    def eventFilter(self, obj, ev):
+                        if ev.type() in (QEvent.Type.ApplicationPaletteChange, QEvent.Type.PaletteChange, QEvent.Type.ThemeChange):
+                            d = is_dark_theme()
+                            if act_navcube:
+                                act_navcube.setIcon(get_toolbar_icon("navcube", d))
+                            if act_gumball:
+                                act_gumball.setIcon(get_toolbar_icon("gumball", d))
+                            if act_radial:
+                                act_radial.setIcon(get_toolbar_icon("radial", d))
+                            for a in (act_navcube, act_gumball, act_radial):
+                                if a is not None:
+                                    apply_toolbar_button_style(tb.widgetForAction(a), d)
+                        return False
+
+                if not hasattr(win, "_gumball_theme_filter"):
+                    win._gumball_theme_filter = _ThemeChangeListener(win)
+                    win.installEventFilter(win._gumball_theme_filter)
+
+            except Exception as e:
+                log.warning(f"Failed to build 3-button toolbar: {e}")
+
+        # 4. Synchronize Node Editor button if active
         editor = controller.get_node_editor()
         if editor is not None and hasattr(editor, "btn_gumball"):
             editor.btn_gumball.blockSignals(True)
             editor.btn_gumball.setChecked(controller.enabled)
             editor.btn_gumball.blockSignals(False)
 
+        # 5. Menu actions
         if hasattr(app, "add_menu_action"):
             try:
-                app.add_menu_action("Extensions", "🎯 Gumball Manipulator", controller.toggle)
-            except Exception:
-                pass
-            try:
-                app.add_menu_action("Tools", "🎯 Gumball Manipulator", controller.toggle)
-            except Exception:
-                pass
-
-        # Initialize separated Navigation Orbit (NavOrbit) module
-        try:
-            from .navorbit import setup_navorbit
-            setup_navorbit(app)
-        except Exception as no_ex:
-            log.warning(f"Failed to initialize NavOrbit: {no_ex}")
-
-        # Initialize separated Radial Menu (Pie Menu) module
-        try:
-            from .radialmenu import setup_radial_menu
-            setup_radial_menu(app)
-        except Exception as rm_ex:
-            log.warning(f"Failed to initialize Radial Menu: {rm_ex}")
+                act_menu = app.add_menu_action(
+                    "🎯 Gumball Manipulator",
+                    controller.toggle,
+                    shortcut="Alt+G",
+                    tip="Toggle 3D Gumball Manipulator (Alt+G)",
+                )
+                if act_menu is not None:
+                    act_menu.setCheckable(True)
+                    act_menu.setChecked(controller.enabled)
+            except Exception as me:
+                log.warning(f"Failed to register Gumball menu action: {me}")
 
     except Exception as e:
         log.exception(f"Failed to initialize Gumball Manipulator plugin: {e}")
+
+
+setup = init
