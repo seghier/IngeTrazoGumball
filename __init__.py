@@ -2274,7 +2274,7 @@ def apply_toolbar_button_style(btn, is_dark: bool) -> None:
         """)
 
 
-def init(app: Any) -> None:
+def setup(app: Any) -> None:
     """Extension initialization entry point called by IngeTrazo."""
     try:
         controller = GumballController(app)
@@ -2424,4 +2424,4 @@ def init(app: Any) -> None:
         log.exception(f"Failed to initialize Gumball Manipulator plugin: {e}")
 
 
-setup = init
+init = setup
