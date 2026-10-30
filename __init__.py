@@ -2327,14 +2327,14 @@ def setup(app: Any) -> None:
 
                 is_dark = is_dark_theme()
 
-                # Button 1: View Cube (NavOrbit)
+                # Button 1: NavOrbit
                 act_navcube = getattr(win, "_navcube_action", None)
                 if act_navcube is None and nav_controller is not None:
-                    act_navcube = tb.addAction(get_toolbar_icon("navcube", is_dark), "View Cube")
+                    act_navcube = tb.addAction(get_toolbar_icon("navcube", is_dark), "NavOrbit")
                     act_navcube.setObjectName("action_toggle_navcube")
                     act_navcube.setCheckable(True)
                     act_navcube.setChecked(nav_controller.enabled)
-                    act_navcube.setToolTip("Toggle 3D View Cube / NavOrbit")
+                    act_navcube.setToolTip("Toggle 3D NavOrbit")
                     act_navcube.triggered.connect(nav_controller.set_enabled)
                     win._navcube_action = act_navcube
                     nav_controller.toolbar_action = act_navcube

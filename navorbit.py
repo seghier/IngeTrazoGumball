@@ -155,13 +155,21 @@ class NavOrbitController(QObject):
         self._register_menu_actions()
 
     def _install_event_filters(self) -> None:
+        win = self.get_window()
+        if win is not None:
+            win.installEventFilter(self)
+            try:
+                from PySide6.QtWidgets import QWidget
+                for child in win.findChildren(QWidget):
+                    if child.__class__.__name__ == "Viewport":
+                        child.installEventFilter(self)
+                        child.setMouseTracking(True)
+            except Exception:
+                pass
         vp = self.get_viewport()
         if vp is not None:
             vp.installEventFilter(self)
             vp.setMouseTracking(True)
-        win = self.get_window()
-        if win is not None:
-            win.installEventFilter(self)
 
     def _register_menu_actions(self) -> None:
         """Adds 'Show Navigation Orbit' to Extensions and Camera/View menus."""
@@ -228,10 +236,21 @@ class NavOrbitController(QObject):
     # Orthographic / Perspective Detection & Switching
     # ========================================================================
 
-    def is_orthographic(self) -> bool:
+    def is_orthographic(self, target: Optional[Any] = None) -> bool:
         """Returns True if the camera or viewport is currently in Orthographic mode."""
-        cam = self.get_camera()
-        vp = self.get_viewport()
+        if target is not None:
+            if hasattr(target, "camera"):
+                vp = target
+                cam = getattr(target, "camera", None)
+            elif hasattr(target, "pitch") or hasattr(target, "perspective"):
+                cam = target
+                vp = None
+            else:
+                cam = None
+                vp = target
+        else:
+            cam = self.get_camera()
+            vp = self.get_viewport()
 
         for obj in (cam, vp):
             if obj is None:
@@ -249,12 +268,16 @@ class NavOrbitController(QObject):
                 return "ortho" in mode_str or "parallel" in mode_str
         return False
 
-    def toggle_ortho_perspective(self) -> None:
+    def is_perspective(self, target: Optional[Any] = None) -> bool:
+        """Returns True if the camera or viewport is in Perspective mode."""
+        return not self.is_orthographic(target)
+
+    def toggle_ortho_perspective(self, viewport: Optional[Any] = None) -> None:
         """Switches the camera/viewport between Orthographic and Perspective projection."""
-        cam = self.get_camera()
-        vp = self.get_viewport()
+        vp = viewport or getattr(self, "_active_viewport", None) or self.get_viewport()
+        cam = getattr(vp, "camera", None) if vp is not None else self.get_camera()
         win = self.get_window()
-        new_ortho = not self.is_orthographic()
+        new_ortho = not self.is_orthographic(vp)
         toggled = False
 
         # 1. Check direct methods on viewport or camera
@@ -404,6 +427,21 @@ class NavOrbitController(QObject):
         camera = getattr(viewport, "camera", None)
         if camera is None:
             return
+
+        # NavOrbit must only appear in Perspective view
+        if not self.is_perspective(viewport):
+            return
+
+        # Ensure event filter is active on this perspective viewport
+        if not hasattr(viewport, "_navorbit_filter_installed"):
+            try:
+                viewport.installEventFilter(self)
+                viewport.setMouseTracking(True)
+                viewport._navorbit_filter_installed = True
+            except Exception:
+                pass
+
+        self._active_viewport = viewport
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -779,9 +817,17 @@ class NavOrbitController(QObject):
     # Smooth Camera Animation (60 FPS Glide)
     # ========================================================================
 
-    def animate_to(self, target_yaw: float, target_pitch: float, duration_ms: float = 230.0) -> None:
+    def animate_to(
+        self,
+        target_yaw: float,
+        target_pitch: float,
+        duration_ms: float = 230.0,
+        viewport: Optional[Any] = None,
+    ) -> None:
         """Smoothly interpolates camera orientation with cubic ease-out."""
-        cam = self.get_camera()
+        vp = viewport or getattr(self, "_active_viewport", None) or self.get_viewport()
+        self._active_viewport = vp
+        cam = getattr(vp, "camera", None) if vp is not None else self.get_camera()
         if cam is None:
             return
 
@@ -799,8 +845,8 @@ class NavOrbitController(QObject):
         self._anim_timer.start()
 
     def _on_anim_step(self) -> None:
-        cam = self.get_camera()
-        vp = self.get_viewport()
+        vp = getattr(self, "_active_viewport", None) or self.get_viewport()
+        cam = getattr(vp, "camera", None) if vp is not None else self.get_camera()
         if cam is None or vp is None:
             self._anim_timer.stop()
             return
@@ -827,9 +873,10 @@ class NavOrbitController(QObject):
     # Directional Step and Roll Execution
     # ========================================================================
 
-    def _execute_arrow_action(self, action_id: str) -> None:
+    def _execute_arrow_action(self, action_id: str, viewport: Optional[Any] = None) -> None:
         """Executes a 45° step or 90° roll action."""
-        cam = self.get_camera()
+        vp = viewport or getattr(self, "_active_viewport", None) or self.get_viewport()
+        cam = getattr(vp, "camera", None) if vp is not None else self.get_camera()
         if cam is None:
             return
 
@@ -840,18 +887,18 @@ class NavOrbitController(QObject):
 
         if action_id == "ARROW_UP":
             target_pitch = min(cur_pitch + step_rad, math.radians(90.0))
-            self.animate_to(cur_yaw, target_pitch)
+            self.animate_to(cur_yaw, target_pitch, viewport=vp)
         elif action_id == "ARROW_DOWN":
             target_pitch = max(cur_pitch - step_rad, math.radians(-90.0))
-            self.animate_to(cur_yaw, target_pitch)
+            self.animate_to(cur_yaw, target_pitch, viewport=vp)
         elif action_id == "ARROW_LEFT":
-            self.animate_to(cur_yaw - step_rad, cur_pitch)
+            self.animate_to(cur_yaw - step_rad, cur_pitch, viewport=vp)
         elif action_id == "ARROW_RIGHT":
-            self.animate_to(cur_yaw + step_rad, cur_pitch)
+            self.animate_to(cur_yaw + step_rad, cur_pitch, viewport=vp)
         elif action_id == "ROLL_LEFT":
-            self.animate_to(cur_yaw + roll_rad, cur_pitch)
+            self.animate_to(cur_yaw + roll_rad, cur_pitch, viewport=vp)
         elif action_id == "ROLL_RIGHT":
-            self.animate_to(cur_yaw - roll_rad, cur_pitch)
+            self.animate_to(cur_yaw - roll_rad, cur_pitch, viewport=vp)
 
     # ========================================================================
     # Qt Event Filter (Intercepting Mouse & Viewport Events)
@@ -861,9 +908,19 @@ class NavOrbitController(QObject):
         if not self.enabled:
             return False
 
-        vp = self.get_viewport()
         win = self.get_window()
-        if vp is None or (obj != vp and obj != win):
+        vp = self.get_viewport()
+
+        # Identify target viewport
+        if hasattr(obj, "camera"):
+            target_vp = obj
+        elif obj == win:
+            target_vp = getattr(win, "viewport", None) or getattr(self, "_active_viewport", None) or vp
+        else:
+            return False
+
+        # NavOrbit must only interact with Perspective views
+        if target_vp is None or not self.is_perspective(target_vp):
             return False
 
         etype = event.type()
@@ -879,24 +936,24 @@ class NavOrbitController(QObject):
             if self._is_mouse_down and not self.is_dragging_cube:
                 if math.hypot(mx - self._press_mouse_pos.x(), my - self._press_mouse_pos.y()) > 4.5:
                     self.is_dragging_cube = True
-                    vp.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    target_vp.setCursor(Qt.CursorShape.ClosedHandCursor)
 
             if self.is_dragging_cube:
                 dx = mx - self._last_mouse_pos.x()
                 dy = my - self._last_mouse_pos.y()
                 self._last_mouse_pos = QPointF(mx, my)
 
-                cam = self.get_camera()
+                cam = getattr(target_vp, "camera", None) if target_vp is not None else self.get_camera()
                 if cam is not None:
                     if hasattr(cam, "orbit"):
-                        cam.orbit(dx, dy, vp.height())
+                        cam.orbit(dx, dy, target_vp.height())
                     else:
                         cam.yaw -= dx * 0.008
                         cam.pitch = max(
                             min(cam.pitch + dy * 0.008, math.radians(89.0)),
                             math.radians(-89.0),
                         )
-                    vp.update()
+                    target_vp.update()
                 event.accept()
                 return True
 
@@ -906,17 +963,17 @@ class NavOrbitController(QObject):
                 hit = self.hit_test(mx, my)
                 if hit != self.hovered_part:
                     self.hovered_part = hit
-                    vp.setCursor(Qt.CursorShape.PointingHandCursor if hit else Qt.CursorShape.ArrowCursor)
-                    vp.update()
+                    target_vp.setCursor(Qt.CursorShape.PointingHandCursor if hit else Qt.CursorShape.ArrowCursor)
+                    target_vp.update()
                 elif hit is not None:
-                    vp.setCursor(Qt.CursorShape.PointingHandCursor)
+                    target_vp.setCursor(Qt.CursorShape.PointingHandCursor)
                 event.accept()
                 return True
             else:
                 if self.hovered_part is not None:
                     self.hovered_part = None
-                    vp.setCursor(Qt.CursorShape.ArrowCursor)
-                    vp.update()
+                    target_vp.setCursor(Qt.CursorShape.ArrowCursor)
+                    target_vp.update()
 
         # --------------------------------------------------------------------
         # Mouse Button Press
@@ -936,12 +993,12 @@ class NavOrbitController(QObject):
                         self._last_mouse_pos = QPointF(mx, my)
                         self.pressed_part = hit
 
-                        if hasattr(vp, "_box_active"):
-                            vp._box_active = False
-                            vp._box_start = None
-                            vp._box_cur = None
+                        if hasattr(target_vp, "_box_active"):
+                            target_vp._box_active = False
+                            target_vp._box_start = None
+                            target_vp._box_cur = None
 
-                        vp.update()
+                        target_vp.update()
                         event.accept()
                         return True
 
@@ -962,23 +1019,23 @@ class NavOrbitController(QObject):
 
                         if ptype == "home":
                             target = part.get("target", (math.radians(-45.0), math.radians(35.26438968)))
-                            self.animate_to(target[0], target[1])
+                            self.animate_to(target[0], target[1], viewport=target_vp)
                         elif ptype == "ortho_persp":
-                            self.toggle_ortho_perspective()
+                            self.toggle_ortho_perspective(viewport=target_vp)
                         elif ptype == "arrow":
-                            self._execute_arrow_action(part.get("action", ""))
+                            self._execute_arrow_action(part.get("action", ""), viewport=target_vp)
                         elif ptype == "face":
                             target = part.get("target")
                             if target:
-                                self.animate_to(target[0], target[1])
+                                self.animate_to(target[0], target[1], viewport=target_vp)
 
                     self._is_mouse_down = False
                     self.pressed_part = None
                     self.is_dragging_cube = False
                     hit = self.hit_test(mx, my)
                     self.hovered_part = hit
-                    vp.setCursor(Qt.CursorShape.PointingHandCursor if hit else Qt.CursorShape.ArrowCursor)
-                    vp.update()
+                    target_vp.setCursor(Qt.CursorShape.PointingHandCursor if hit else Qt.CursorShape.ArrowCursor)
+                    target_vp.update()
                     event.accept()
                     return True
 
@@ -988,8 +1045,8 @@ class NavOrbitController(QObject):
         elif etype == QEvent.Type.Leave:
             if self.hovered_part is not None and not self._is_mouse_down:
                 self.hovered_part = None
-                vp.setCursor(Qt.CursorShape.ArrowCursor)
-                vp.update()
+                target_vp.setCursor(Qt.CursorShape.ArrowCursor)
+                target_vp.update()
 
         return False
 
