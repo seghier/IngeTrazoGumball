@@ -8,7 +8,7 @@ author_url = "https://github.com/seghier"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/seghier/IngeTrazoGumball"
 download = "https://github.com/seghier/IngeTrazoGumball/releases/download/v1.2/gumball.zip"
-sha256 = "60e2eaa76881dc018355a0a06cad606a64e11ae699165267e58f6d7e9371dd63"
+sha256 = "011221d0a3b3e80aabf751ab1ac1d63ec9427036308f71ad713914d1e8dd193d"
 ingetrazo = "0.5.7"
 tags = ["productivity", "drawing"]
 
