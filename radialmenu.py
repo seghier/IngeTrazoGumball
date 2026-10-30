@@ -431,7 +431,10 @@ class RadialMenuWidget(QWidget):
         self.show()
         self.raise_()
         self.setFocus()
-        self.grabMouse()
+        try:
+            self.grabMouse()
+        except Exception:
+            pass
 
     def close_menu(self) -> None:
         QToolTip.hideText()
@@ -1376,6 +1379,41 @@ class RadialMenuController(QObject):
                 return True
         return False
 
+    def _ensure_all_viewports_hooked(self) -> None:
+        """Finds all viewports in the window and split controller and installs the event filter."""
+        win = self.get_window()
+        if win is not None:
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl is not None and hasattr(split_ctrl, "viewports"):
+                for v in split_ctrl.viewports:
+                    if not getattr(v, "_radial_filter_hooked", False):
+                        try:
+                            v._radial_filter_hooked = True
+                            v.installEventFilter(self)
+                            v.setMouseTracking(True)
+                        except Exception:
+                            pass
+            try:
+                from PySide6.QtWidgets import QWidget
+                for child in win.findChildren(QWidget):
+                    if self._is_viewport(child) and not getattr(child, "_radial_filter_hooked", False):
+                        try:
+                            child._radial_filter_hooked = True
+                            child.installEventFilter(self)
+                            child.setMouseTracking(True)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        vp = self.get_viewport()
+        if vp is not None and not getattr(vp, "_radial_filter_hooked", False):
+            try:
+                vp._radial_filter_hooked = True
+                vp.installEventFilter(self)
+                vp.setMouseTracking(True)
+            except Exception:
+                pass
+
     def _hook_viewport(self) -> None:
         win = self.get_window()
         if win is not None and isinstance(win, QObject):
@@ -1383,22 +1421,7 @@ class RadialMenuController(QObject):
                 win.installEventFilter(self)
             except Exception:
                 pass
-            try:
-                from PySide6.QtWidgets import QWidget
-                for child in win.findChildren(QWidget):
-                    if self._is_viewport(child):
-                        child.installEventFilter(self)
-                        child.setMouseTracking(True)
-            except Exception:
-                pass
-
-        vp = self.get_viewport()
-        if vp is not None and isinstance(vp, QObject):
-            try:
-                vp.installEventFilter(self)
-                vp.setMouseTracking(True)
-            except Exception:
-                pass
+        self._ensure_all_viewports_hooked()
 
     def _register_menu_items(self) -> None:
         """Adds settings menu item under Extensions and Tools menus."""
@@ -1490,16 +1513,8 @@ class RadialMenuController(QObject):
 
         # Dynamically discover newly created Viewports when window children change
         if obj == win:
-            if event.type() == QEvent.Type.ChildAdded:
-                child = getattr(event, "child", None)
-                if callable(child):
-                    child = child()
-                if child and self._is_viewport(child):
-                    try:
-                        child.installEventFilter(self)
-                        child.setMouseTracking(True)
-                    except Exception:
-                        pass
+            if event.type() in (QEvent.Type.ChildAdded, QEvent.Type.Show, QEvent.Type.Resize):
+                self._ensure_all_viewports_hooked()
             return False
 
         # If radial menu is currently open, any canvas click closes it
@@ -1628,6 +1643,17 @@ def setup_radial_menu(app: Any) -> RadialMenuController:
     global _RADIAL_CONTROLLER
     if _RADIAL_CONTROLLER is None:
         _RADIAL_CONTROLLER = RadialMenuController(app)
+    win = getattr(app, "window", None) or getattr(app, "_window", None)
+    if win:
+        win = win() if callable(win) else win
+        if win:
+            win._radial_controller = _RADIAL_CONTROLLER
+    if hasattr(app, "__dict__"):
+        app._radial_controller = _RADIAL_CONTROLLER
+    qapp = QApplication.instance()
+    if qapp:
+        qapp._radial_controller = _RADIAL_CONTROLLER
+    _RADIAL_CONTROLLER._ensure_all_viewports_hooked()
     return _RADIAL_CONTROLLER
 
 

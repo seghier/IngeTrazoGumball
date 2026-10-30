@@ -296,12 +296,14 @@ class GumballController(QObject):
         self.hovered_part: Optional[str] = None
         self.hovered_handle_grp: Optional[Any] = None
 
-        # Cached screen geometry for hit-testing
+        # Cached screen geometry for hit-testing (per-viewport and global fallback)
         self._screen_p0: Optional[QPointF] = None
         self._screen_axes: Dict[str, QPointF] = {}
         self._screen_axis_ends: Dict[str, QPointF] = {}
         self._screen_planes: Dict[str, QPolygonF] = {}
         self._screen_rot_arcs: Dict[str, List[QPointF]] = {}
+        self._vp_screen_cache: Dict[int, Dict[str, Any]] = {}
+        self._drag_viewport: Optional[Any] = None
 
         # Register overlay on IngeTrazo viewport
         if hasattr(app, "add_overlay"):
@@ -310,22 +312,81 @@ class GumballController(QObject):
         # Hook viewport and main window for event handling
         self._hook_viewport_and_window()
 
-    def _hook_viewport_and_window(self) -> None:
-        vp = self.get_viewport()
-        if vp is not None and isinstance(vp, QObject):
+    def _is_viewport(self, obj: Any) -> bool:
+        """Determines if the given object is an IngeTrazo 3D or orthographic viewport."""
+        if obj is None:
+            return False
+        if obj == self.get_viewport():
+            return True
+        if hasattr(obj, "camera") or hasattr(obj, "paintGL"):
+            return True
+        if obj.__class__.__name__ == "Viewport":
+            return True
+        win = self.get_window()
+        if win is not None:
+            if obj == getattr(win, "viewport", None):
+                return True
+            if obj in getattr(win, "viewports", ()):
+                return True
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl is not None and hasattr(split_ctrl, "viewports") and obj in getattr(split_ctrl, "viewports", ()):
+                return True
+        return False
+
+    def _get_all_viewports(self) -> List[Any]:
+        """Collects all active and pooled viewports in the application."""
+        vps: List[Any] = []
+        main_vp = self.get_viewport()
+        if main_vp:
+            vps.append(main_vp)
+        win = self.get_window()
+        if win:
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl and hasattr(split_ctrl, "viewports"):
+                for v in split_ctrl.viewports:
+                    if v not in vps:
+                        vps.append(v)
             try:
-                vp.installEventFilter(self)
+                from PySide6.QtWidgets import QWidget
+                for child in win.findChildren(QWidget):
+                    if self._is_viewport(child) and child not in vps:
+                        vps.append(child)
             except Exception:
                 pass
-            if hasattr(vp, "escape") and not getattr(vp, "_gumball_escape_hooked", False):
-                orig_escape = vp.escape
-                def _gumball_wrapped_escape(*args, **kwargs):
-                    if self._numeric_buffer or self._active_input_part or self.is_dragging:
-                        self._cancel_numeric_or_drag()
-                        return
-                    return orig_escape(*args, **kwargs)
-                vp.escape = _gumball_wrapped_escape
-                vp._gumball_escape_hooked = True
+        return vps
+
+    def _ensure_all_viewports_hooked(self) -> None:
+        """Installs the Gumball event filter and enables mouse tracking on all viewports."""
+        for vp in self._get_all_viewports():
+            if vp is not None and isinstance(vp, QObject) and not getattr(vp, "_gumball_hooked", False):
+                try:
+                    vp._gumball_hooked = True
+                    vp.installEventFilter(self)
+                    if hasattr(vp, "setMouseTracking"):
+                        vp.setMouseTracking(True)
+                except Exception:
+                    pass
+                if hasattr(vp, "escape") and not getattr(vp, "_gumball_escape_hooked", False):
+                    orig_escape = vp.escape
+                    def _gumball_wrapped_escape(*args, _orig=orig_escape, **kwargs):
+                        if self._numeric_buffer or self._active_input_part or self.is_dragging:
+                            self._cancel_numeric_or_drag()
+                            return
+                        return _orig(*args, **kwargs)
+                    vp.escape = _gumball_wrapped_escape
+                    vp._gumball_escape_hooked = True
+
+    def redraw_all_viewports(self) -> None:
+        """Triggers a repaint across all visible viewports (multi-view real-time sync)."""
+        for vp in self._get_all_viewports():
+            try:
+                if hasattr(vp, "isVisible") and vp.isVisible() and hasattr(vp, "update"):
+                    vp.update()
+            except Exception:
+                pass
+
+    def _hook_viewport_and_window(self) -> None:
+        self._ensure_all_viewports_hooked()
 
         win = self.get_window()
         if win is not None and isinstance(win, QObject):
@@ -410,10 +471,8 @@ class GumballController(QObject):
                 editor.btn_gumball.setChecked(self.enabled)
                 editor.btn_gumball.blockSignals(False)
 
-        # 3. Redraw viewport
-        vp = self.get_viewport()
-        if vp is not None and hasattr(vp, "update"):
-            vp.update()
+        # 3. Redraw viewports
+        self.redraw_all_viewports()
         return self.enabled
 
     def toggle(self) -> bool:
@@ -693,6 +752,15 @@ class GumballController(QObject):
             "ROT_X": arc_rot_x,
             "ROT_Y": arc_rot_y,
             "ROT_Z": arc_rot_z,
+        }
+
+        # Cache screen geometry per-viewport for multi-view hit-testing and dragging
+        self._vp_screen_cache[id(viewport)] = {
+            "p0": p0,
+            "axes": self._screen_axes,
+            "axis_ends": self._screen_axis_ends,
+            "planes": self._screen_planes,
+            "rot_arcs": self._screen_rot_arcs,
         }
 
         rot_arcs_data = [
@@ -1047,12 +1115,24 @@ class GumballController(QObject):
     # 2D Screen Hit-Testing
     # ========================================================================
 
-    def hit_test(self, mx: float, my: float) -> Optional[str]:
+    def hit_test(self, mx: float, my: float, viewport: Any = None) -> Optional[str]:
         """Determines if mouse screen position (mx, my) is over any Gumball component."""
-        if not self.enabled or self.target_pos is None or not self._screen_axes or self._screen_p0 is None:
+        if not self.enabled or self.target_pos is None:
             return None
 
-        p0 = self._screen_p0
+        geom = None
+        if viewport is not None and id(viewport) in self._vp_screen_cache:
+            geom = self._vp_screen_cache[id(viewport)]
+
+        p0 = geom["p0"] if geom else self._screen_p0
+        if p0 is None:
+            return None
+
+        screen_axes = geom["axes"] if geom else self._screen_axes
+        screen_axis_ends = geom["axis_ends"] if geom else self._screen_axis_ends
+        screen_planes = geom["planes"] if geom else self._screen_planes
+        screen_rot_arcs = geom["rot_arcs"] if geom else self._screen_rot_arcs
+
         # 1. Center Origin
         if math.hypot(mx - p0.x(), my - p0.y()) <= self.ORIGIN_RADIUS + 4.0:
             return "ORIGIN"
@@ -1061,7 +1141,7 @@ class GumballController(QObject):
         best_rot: Optional[str] = None
         best_rot_dist = 7.5
         for name in self.ROT_PARTS:
-            arc_pts = self._screen_rot_arcs.get(name, [])
+            arc_pts = screen_rot_arcs.get(name, [])
             d = dist_to_polyline(mx, my, arc_pts)
             if d <= best_rot_dist:
                 best_rot_dist = d
@@ -1071,21 +1151,33 @@ class GumballController(QObject):
 
         # 3. Planar Tiles
         for name in ("XY", "XZ", "YZ"):
-            if self._hit_test_plane(mx, my, name):
-                return name
+            poly = screen_planes.get(name)
+            if poly is not None and not poly.isEmpty():
+                if poly.containsPoint(QPointF(mx, my), Qt.FillRule.OddEvenFill):
+                    return name
+                pts = [poly.at(i) for i in range(poly.count())]
+                if len(pts) >= 4:
+                    pts.append(pts[0])
+                    if dist_to_polyline(mx, my, pts) <= 4.0:
+                        return name
 
         # 4. Axis Arrows
         for name in ("X", "Y", "Z"):
-            p_end = self._screen_axis_ends.get(name) or (p0 + self._screen_axes.get(name, QPointF(0, 0)))
-            if math.hypot(mx - p_end.x(), my - p_end.y()) <= self.ARROW_HEAD_LEN + 4.5:
-                return name
-            if dist_to_segment(mx, my, p0.x(), p0.y(), p_end.x(), p_end.y()) <= 7.0:
-                return name
+            p_end = screen_axis_ends.get(name) or (p0 + screen_axes.get(name, QPointF(0, 0)))
+            if p_end is not None:
+                if math.hypot(mx - p_end.x(), my - p_end.y()) <= self.ARROW_HEAD_LEN + 4.5:
+                    return name
+                if dist_to_segment(mx, my, p0.x(), p0.y(), p_end.x(), p_end.y()) <= 7.0:
+                    return name
 
         return None
 
-    def _hit_test_plane(self, mx: float, my: float, part: str) -> bool:
-        poly = self._screen_planes.get(part)
+    def _hit_test_plane(self, mx: float, my: float, part: str, viewport: Any = None) -> bool:
+        geom = None
+        if viewport is not None and id(viewport) in self._vp_screen_cache:
+            geom = self._vp_screen_cache[id(viewport)]
+        screen_planes = geom["planes"] if geom else self._screen_planes
+        poly = screen_planes.get(part)
         if poly is None or poly.isEmpty():
             return False
 
@@ -1105,10 +1197,28 @@ class GumballController(QObject):
     # ========================================================================
 
     def eventFilter(self, obj: Any, event: QEvent) -> bool:
-        vp = self.get_viewport()
         win = self.get_window()
-        if vp is None or (obj != vp and obj != win):
+        is_vp = self._is_viewport(obj)
+        if not is_vp and obj != win:
             return False
+
+        target_vp = obj if is_vp else (getattr(self, "_drag_viewport", None) or self.get_viewport())
+        if target_vp is None:
+            return False
+
+        # Dynamically discover newly created Viewports when window layout or children change
+        if obj == win and event.type() in (QEvent.Type.ChildAdded, QEvent.Type.Show, QEvent.Type.Resize):
+            self._ensure_all_viewports_hooked()
+
+        # Ensure filter & mouse tracking on target viewport
+        if is_vp and not getattr(target_vp, "_gumball_hooked", False):
+            try:
+                target_vp._gumball_hooked = True
+                target_vp.installEventFilter(self)
+                if hasattr(target_vp, "setMouseTracking"):
+                    target_vp.setMouseTracking(True)
+            except Exception:
+                pass
 
         etype = event.type()
 
@@ -1154,7 +1264,7 @@ class GumballController(QObject):
                 if self._numeric_buffer:
                     self._numeric_buffer = self._numeric_buffer[:-1]
                     self._update_numeric_display()
-                    vp.update()
+                    self.redraw_all_viewports()
                     return True
 
             # 4. Numeric and sign characters for direct value entry
@@ -1182,16 +1292,16 @@ class GumballController(QObject):
 
                         self._numeric_buffer += key_char
                         self._update_numeric_display()
-                        vp.update()
+                        self.redraw_all_viewports()
                         return True
 
             if self.is_dragging and event.key() == Qt.Key.Key_Shift:
-                self._handle_drag_move(self._last_mouse_pos.x(), self._last_mouse_pos.y(), snap_15=True)
+                self._handle_drag_move(self._last_mouse_pos.x(), self._last_mouse_pos.y(), snap_15=True, viewport=target_vp)
                 return True
 
         if etype == QEvent.Type.KeyRelease:
             if self.is_dragging and event.key() == Qt.Key.Key_Shift:
-                self._handle_drag_move(self._last_mouse_pos.x(), self._last_mouse_pos.y(), snap_15=False)
+                self._handle_drag_move(self._last_mouse_pos.x(), self._last_mouse_pos.y(), snap_15=False, viewport=target_vp)
                 return True
 
         if etype == QEvent.Type.MouseMove:
@@ -1200,10 +1310,10 @@ class GumballController(QObject):
             self._last_mouse_pos = QPointF(mx, my)
 
             if self.is_dragging:
-                if hasattr(vp, "_box_active") and vp._box_active:
-                    vp._box_active = False
-                    vp._box_start = None
-                    vp._box_cur = None
+                if hasattr(target_vp, "_box_active") and target_vp._box_active:
+                    target_vp._box_active = False
+                    target_vp._box_start = None
+                    target_vp._box_cur = None
 
                 # 5.0 pixel deadzone before activating mouse drag movement
                 if math.hypot(mx - float(self._press_screen_pos.x()), my - float(self._press_screen_pos.y())) >= 5.0:
@@ -1211,12 +1321,12 @@ class GumballController(QObject):
 
                 if self._mouse_dragged and not self._numeric_buffer:
                     snap_15 = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                    self._handle_drag_move(mx, my, snap_15=snap_15)
+                    self._handle_drag_move(mx, my, snap_15=snap_15, viewport=target_vp)
 
                 event.accept()
                 return True
             else:
-                hit = self.hit_test(mx, my)
+                hit = self.hit_test(mx, my, viewport=target_vp)
                 near_handle_grp = None
 
                 if hit is None and self.enabled:
@@ -1226,7 +1336,7 @@ class GumballController(QObject):
                             info = self._parse_handle_group(grp)
                             if info is not None:
                                 h_pos = grp.xform.map(QVector3D(0, 0, 0)) if hasattr(grp, "xform") else None
-                                s_pt = to_screen_pt(vp, h_pos)
+                                s_pt = to_screen_pt(target_vp, h_pos)
                                 if s_pt and math.hypot(mx - s_pt.x(), my - s_pt.y()) <= 15.0:
                                     near_handle_grp = grp
                                     break
@@ -1234,12 +1344,12 @@ class GumballController(QObject):
                 if hit != self.hovered_part or near_handle_grp != self.hovered_handle_grp:
                     self.hovered_part = hit
                     self.hovered_handle_grp = near_handle_grp
-                    vp.setCursor(
+                    target_vp.setCursor(
                         Qt.CursorShape.PointingHandCursor if (hit or near_handle_grp) else Qt.CursorShape.ArrowCursor
                     )
-                    vp.update()
+                    target_vp.update()
                 elif near_handle_grp is not None:
-                    vp.setCursor(Qt.CursorShape.PointingHandCursor)
+                    target_vp.setCursor(Qt.CursorShape.PointingHandCursor)
 
                 if hit:
                     event.accept()
@@ -1256,15 +1366,16 @@ class GumballController(QObject):
                 if not self.enabled:
                     return False
 
-                hit = self.hit_test(mx, my)
+                hit = self.hit_test(mx, my, viewport=target_vp)
                 if hit:
-                    if hasattr(vp, "setFocus"):
-                        vp.setFocus()
-                    if hasattr(vp, "_box_active"):
-                        vp._box_active = False
-                        vp._box_start = None
-                        vp._box_cur = None
-                    self._start_drag(hit, mx, my)
+                    self._drag_viewport = target_vp
+                    if hasattr(target_vp, "setFocus"):
+                        target_vp.setFocus()
+                    if hasattr(target_vp, "_box_active"):
+                        target_vp._box_active = False
+                        target_vp._box_start = None
+                        target_vp._box_cur = None
+                    self._start_drag(hit, mx, my, viewport=target_vp)
                     event.accept()
                     return True
 
@@ -1279,40 +1390,40 @@ class GumballController(QObject):
                         if info is not None:
                             h_pos = grp.xform.map(QVector3D(0, 0, 0)) if hasattr(grp, "xform") else None
                             if h_pos is not None:
-                                s_pt = to_screen_pt(vp, h_pos)
+                                s_pt = to_screen_pt(target_vp, h_pos)
                                 if s_pt and math.hypot(mx - s_pt.x(), my - s_pt.y()) <= 18.0:
-                                    if hasattr(vp, "_box_active"):
-                                        vp._box_active = False
-                                        vp._box_start = None
-                                        vp._box_cur = None
+                                    if hasattr(target_vp, "_box_active"):
+                                        target_vp._box_active = False
+                                        target_vp._box_start = None
+                                        target_vp._box_cur = None
                                     self.curve_handle_info = info
                                     self.target_pos = h_pos
                                     self.target_mode = "CURVE_HANDLE"
-                                    vp.update()
+                                    self.redraw_all_viewports()
                                     event.accept()
                                     return True
 
-                if hasattr(vp, "pick_group"):
-                    grp = vp.pick_group(int(mx), int(my))
+                if hasattr(target_vp, "pick_group"):
+                    grp = target_vp.pick_group(int(mx), int(my))
                     info = self._parse_handle_group(grp)
                     if info is not None:
-                        if hasattr(vp, "_box_active"):
-                            vp._box_active = False
-                            vp._box_start = None
-                            vp._box_cur = None
+                        if hasattr(target_vp, "_box_active"):
+                            target_vp._box_active = False
+                            target_vp._box_start = None
+                            target_vp._box_cur = None
                         self.curve_handle_info = info
                         self.target_pos = grp.xform.map(QVector3D(0, 0, 0)) if hasattr(grp, "xform") else None
                         self.target_mode = "CURVE_HANDLE"
-                        vp.update()
+                        self.redraw_all_viewports()
                         event.accept()
                         return True
 
         if etype == QEvent.Type.MouseButtonRelease:
             if event.button() == Qt.MouseButton.LeftButton and self.is_dragging:
-                if hasattr(vp, "_box_active"):
-                    vp._box_active = False
-                    vp._box_start = None
-                    vp._box_cur = None
+                if hasattr(target_vp, "_box_active"):
+                    target_vp._box_active = False
+                    target_vp._box_start = None
+                    target_vp._box_cur = None
 
                 # 1. Click without drag (< 4px): activate numeric entry mode
                 if not self._mouse_dragged and not self._numeric_buffer:
@@ -1321,6 +1432,7 @@ class GumballController(QObject):
                     self.is_dragging = False
                     self.drag_part = None
                     self._activate_numeric_input(clicked_part)
+                    self.redraw_all_viewports()
                     event.accept()
                     return True
 
@@ -1329,14 +1441,18 @@ class GumballController(QObject):
                     self._active_input_part = self.drag_part
                     self.is_dragging = False
                     self.drag_part = None
-                    vp.update()
+                    self.redraw_all_viewports()
                     event.accept()
                     return True
 
                 # 3. Standard mouse drag commit
                 self._commit_drag()
+                self._drag_viewport = None
+                self.redraw_all_viewports()
                 event.accept()
                 return True
+
+        return False
 
         return False
 
@@ -1461,7 +1577,7 @@ class GumballController(QObject):
                     for v in verts:
                         self._orig_positions[id(v)] = QVector3D(v.position)
 
-    def _start_drag(self, part: str, mx: float, my: float) -> None:
+    def _start_drag(self, part: str, mx: float, my: float, viewport: Any = None) -> None:
         self.is_dragging = True
         self.drag_part = part
         self.drag_start_screen = QPoint(int(mx), int(my))
@@ -1469,7 +1585,8 @@ class GumballController(QObject):
         self._active_input_part = None
         self._snapshot_targets()
 
-        vp = self.get_viewport()
+        vp = viewport or getattr(self, "_drag_viewport", None) or self.get_viewport()
+        self._drag_viewport = vp
         if vp is None or not hasattr(vp, "_pixel_to_ray"):
             return
         res = vp._pixel_to_ray(int(mx), int(my))
@@ -1733,13 +1850,11 @@ class GumballController(QObject):
         self._active_input_part = None
         self._clear_numeric_display()
         self.update_target()
-        vp = self.get_viewport()
-        if vp:
-            vp.update()
+        self.redraw_all_viewports()
         return True
 
-    def _handle_drag_move(self, mx: float, my: float, snap_15: bool = False) -> None:
-        vp = self.get_viewport()
+    def _handle_drag_move(self, mx: float, my: float, snap_15: bool = False, viewport: Any = None) -> None:
+        vp = viewport or getattr(self, "_drag_viewport", None) or self.get_viewport()
         if not hasattr(vp, "_pixel_to_ray"):
             return
         res = vp._pixel_to_ray(int(mx), int(my))
@@ -1836,7 +1951,7 @@ class GumballController(QObject):
 
                     _touch_entity(scene, scene)
 
-            vp.update()
+            self.redraw_all_viewports()
             return
 
         # ====================================================================
@@ -1934,11 +2049,11 @@ class GumballController(QObject):
                 _touch_entity(scene, scene)
 
         self._update_numeric_display()
-        vp.update()
+        self.redraw_all_viewports()
 
     def _commit_drag(self) -> None:
         """Commits the drag translation or rotation into Undo / Redo history."""
-        vp = self.get_viewport()
+        vp = getattr(self, "_drag_viewport", None) or self.get_viewport()
         is_rot = self.drag_part in self.ROT_PARTS
 
         if self.target_mode == "CURVE_HANDLE" and self.curve_handle_info:
@@ -2054,8 +2169,7 @@ class GumballController(QObject):
         self._active_input_part = None
         self._clear_numeric_display()
         self.update_target()
-        if vp:
-            vp.update()
+        self.redraw_all_viewports()
 
     def _cancel_drag(self) -> None:
         """Cancels current drag and reverts to initial target position and orientation."""
@@ -2070,9 +2184,7 @@ class GumballController(QObject):
         self.current_angle_deg = 0.0
         self._revert_temporary_preview()
         self.update_target()
-        vp = self.get_viewport()
-        if vp:
-            vp.update()
+        self.redraw_all_viewports()
         self._active_input_part = None
         self._clear_numeric_display()
         self.current_delta = QVector3D(0, 0, 0)
@@ -2130,9 +2242,7 @@ class GumballController(QObject):
                     v.position = QVector3D(orig_p)
                 _touch_entity(scene, scene)
 
-        vp = self.get_viewport()
-        if vp:
-            vp.update()
+        self.redraw_all_viewports()
 
 
 # ============================================================================
@@ -2276,8 +2386,10 @@ def apply_toolbar_button_style(btn, is_dark: bool) -> None:
 
 def setup(app: Any) -> None:
     """Extension initialization entry point called by IngeTrazo."""
+    global _GUMBALL_CONTROLLER
     try:
         controller = GumballController(app)
+        _GUMBALL_CONTROLLER = controller
         sys.modules["IngeTrazoGumball"] = sys.modules[__name__]
         if hasattr(app, "__dict__"):
             app._gumball_controller = controller
@@ -2289,6 +2401,7 @@ def setup(app: Any) -> None:
         qapp = QApplication.instance()
         if qapp:
             qapp._gumball_controller = controller
+        controller._ensure_all_viewports_hooked()
 
         # 1. Initialize separated Navigation Orbit (NavOrbit) module
         nav_controller = None
@@ -2372,8 +2485,9 @@ def setup(app: Any) -> None:
                 # Style all 3 buttons
                 actions_to_style = [a for a in (act_navcube, act_gumball, act_radial) if a is not None]
                 for act in actions_to_style:
-                    btn = tb.widgetForAction(act)
-                    apply_toolbar_button_style(btn, is_dark)
+                    btn = tb.widgetForAction(act) if hasattr(tb, "widgetForAction") else None
+                    if btn is not None:
+                        apply_toolbar_button_style(btn, is_dark)
 
                 # Live theme change listener on main window
                 class _ThemeChangeListener(QObject):
@@ -2386,9 +2500,12 @@ def setup(app: Any) -> None:
                                 act_gumball.setIcon(get_toolbar_icon("gumball", d))
                             if act_radial:
                                 act_radial.setIcon(get_toolbar_icon("radial", d))
-                            for a in (act_navcube, act_gumball, act_radial):
-                                if a is not None:
-                                    apply_toolbar_button_style(tb.widgetForAction(a), d)
+                            if hasattr(tb, "widgetForAction"):
+                                for a in (act_navcube, act_gumball, act_radial):
+                                    if a is not None:
+                                        btn_w = tb.widgetForAction(a)
+                                        if btn_w is not None:
+                                            apply_toolbar_button_style(btn_w, d)
                         return False
 
                 if not hasattr(win, "_gumball_theme_filter"):
