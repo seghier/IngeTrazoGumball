@@ -405,11 +405,15 @@ class RadialMenuWidget(QWidget):
         self._update_theme_colors()
         self.update()
 
-    def show_at(self, vp_pos: QPoint) -> None:
+    def show_at(self, vp_pos: QPoint, parent_viewport: Optional[QWidget] = None) -> None:
         """Positions and opens the 2-row radial menu centered at the viewport click point."""
-        vp = self.parentWidget()
+        vp = parent_viewport or self.parentWidget()
         if vp is None:
             return
+
+        if self.parentWidget() != vp:
+            self.setParent(vp, Qt.WindowType.SubWindow | Qt.WindowType.FramelessWindowHint)
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self._update_theme_colors()
 
@@ -417,8 +421,8 @@ class RadialMenuWidget(QWidget):
         half = total_size // 2
 
         # Clamp center position so radial circle stays fully inside viewport boundaries
-        cx = max(half, min(vp_pos.x(), vp.width() - half))
-        cy = max(half, min(vp_pos.y(), vp.height() - half))
+        cx = max(half, min(vp_pos.x(), max(half, vp.width() - half)))
+        cy = max(half, min(vp_pos.y(), max(half, vp.height() - half)))
 
         self.setGeometry(cx - half, cy - half, total_size, total_size)
         self._center_pt = QPointF(half, half)
@@ -1309,6 +1313,7 @@ class RadialMenuController(QObject):
         self._long_right_timer.timeout.connect(self._on_long_right_timeout)
         self._right_press_pos: Optional[QPoint] = None
         self._long_right_activated: bool = False
+        self._active_target_viewport: Optional[Any] = None
 
         self._hook_viewport()
         self._register_menu_items()
@@ -1350,17 +1355,48 @@ class RadialMenuController(QObject):
             self.toolbar_action.setChecked(enabled)
             self.toolbar_action.blockSignals(False)
 
+    def _is_viewport(self, obj: Any) -> bool:
+        """Determines if the given object is an IngeTrazo 3D or orthographic viewport."""
+        if obj is None:
+            return False
+        if obj == self.get_viewport():
+            return True
+        if hasattr(obj, "camera") or hasattr(obj, "paintGL"):
+            return True
+        if obj.__class__.__name__ == "Viewport":
+            return True
+        win = self.get_window()
+        if win is not None:
+            if obj == getattr(win, "viewport", None):
+                return True
+            if obj in getattr(win, "viewports", ()):
+                return True
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl is not None and hasattr(split_ctrl, "viewports") and obj in getattr(split_ctrl, "viewports", ()):
+                return True
+        return False
+
     def _hook_viewport(self) -> None:
-        vp = self.get_viewport()
-        if vp is not None and isinstance(vp, QObject):
-            try:
-                vp.installEventFilter(self)
-            except Exception:
-                pass
         win = self.get_window()
         if win is not None and isinstance(win, QObject):
             try:
                 win.installEventFilter(self)
+            except Exception:
+                pass
+            try:
+                from PySide6.QtWidgets import QWidget
+                for child in win.findChildren(QWidget):
+                    if self._is_viewport(child):
+                        child.installEventFilter(self)
+                        child.setMouseTracking(True)
+            except Exception:
+                pass
+
+        vp = self.get_viewport()
+        if vp is not None and isinstance(vp, QObject):
+            try:
+                vp.installEventFilter(self)
+                vp.setMouseTracking(True)
             except Exception:
                 pass
 
@@ -1410,6 +1446,19 @@ class RadialMenuController(QObject):
         return find_matching_action(win, act_text)
 
     def trigger_slot_action(self, slot: Dict[str, Any]) -> None:
+        target_vp = getattr(self, "_active_target_viewport", None)
+        win = self.get_window()
+        if target_vp is not None and win is not None:
+            # Activate target pane in multi-view if applicable
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl is not None and hasattr(split_ctrl, "viewports") and target_vp in split_ctrl.viewports:
+                try:
+                    split_ctrl.set_active_pane(split_ctrl.viewports.index(target_vp))
+                except Exception:
+                    pass
+            elif hasattr(win, "viewport"):
+                win.viewport = target_vp
+
         act = self.resolve_action(slot)
         if act is not None:
             try:
@@ -1426,34 +1475,64 @@ class RadialMenuController(QObject):
     def _on_long_right_timeout(self) -> None:
         if not self.config.get("enabled", True):
             return
-        vp = self.get_viewport()
+        vp = getattr(self, "_active_target_viewport", None) or self.get_viewport()
         if vp is None or self._right_press_pos is None:
             return
         self._long_right_activated = True
         menu = self.get_radial_widget()
-        menu.show_at(self._right_press_pos)
+        menu.show_at(self._right_press_pos, parent_viewport=vp)
 
     def eventFilter(self, obj: Any, event: QEvent) -> bool:
         if not self.config.get("enabled", True):
             return False
 
-        vp = self.get_viewport()
-        if vp is None or obj != vp:
+        win = self.get_window()
+
+        # Dynamically discover newly created Viewports when window children change
+        if obj == win:
+            if event.type() == QEvent.Type.ChildAdded:
+                child = getattr(event, "child", None)
+                if callable(child):
+                    child = child()
+                if child and self._is_viewport(child):
+                    try:
+                        child.installEventFilter(self)
+                        child.setMouseTracking(True)
+                    except Exception:
+                        pass
             return False
 
-        etype = event.type()
-
         # If radial menu is currently open, any canvas click closes it
-        menu = getattr(self, "_widget", None)
-        if menu is not None and menu.isVisible():
-            if etype in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
-                menu.close_menu()
-                event.accept()
-                return True
-            elif etype == QEvent.Type.ContextMenu:
-                event.accept()
-                return True
+        menu = getattr(self, "radial_widget", None)
+        if menu is not None:
+            try:
+                if menu.isVisible():
+                    etype = event.type()
+                    if etype in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+                        menu.close_menu()
+                        event.accept()
+                        return True
+                    elif etype == QEvent.Type.ContextMenu:
+                        event.accept()
+                        return True
+            except RuntimeError:
+                self.radial_widget = None
 
+        if not self._is_viewport(obj):
+            return False
+
+        target_vp = obj
+
+        # Ensure filter & mouse tracking on target viewport
+        if not hasattr(target_vp, "_radial_filter_hooked"):
+            try:
+                target_vp._radial_filter_hooked = True
+                target_vp.installEventFilter(self)
+                target_vp.setMouseTracking(True)
+            except Exception:
+                pass
+
+        etype = event.type()
         trigger_mode = self.config.get("trigger", "long_right_click")
 
         # 1. Long Right Click Trigger (Hold ~350ms - avoids conflict with Edit Group double-click)
@@ -1461,6 +1540,7 @@ class RadialMenuController(QObject):
             if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 self._right_press_pos = pos
+                self._active_target_viewport = target_vp
                 self._long_right_activated = False
                 self._long_right_timer.start(350)
                 # Let viewport receive press for navigation/selection setup
@@ -1473,6 +1553,7 @@ class RadialMenuController(QObject):
                         # User is dragging / panning / orbiting -> abort long click
                         self._long_right_timer.stop()
                         self._right_press_pos = None
+                        self._active_target_viewport = None
 
             elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
                 if self._long_right_timer.isActive():
@@ -1494,8 +1575,9 @@ class RadialMenuController(QObject):
         elif trigger_mode == "double_click" and etype == QEvent.Type.MouseButtonDblClick:
             if event.button() == Qt.MouseButton.LeftButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                self._active_target_viewport = target_vp
                 menu = self.get_radial_widget()
-                menu.show_at(pos)
+                menu.show_at(pos, parent_viewport=target_vp)
                 event.accept()
                 return True
 
@@ -1503,8 +1585,9 @@ class RadialMenuController(QObject):
         elif trigger_mode == "middle_click" and etype == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.MiddleButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                self._active_target_viewport = target_vp
                 menu = self.get_radial_widget()
-                menu.show_at(pos)
+                menu.show_at(pos, parent_viewport=target_vp)
                 event.accept()
                 return True
 
@@ -1512,8 +1595,9 @@ class RadialMenuController(QObject):
         elif trigger_mode == "right_click" and etype == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.RightButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                self._active_target_viewport = target_vp
                 menu = self.get_radial_widget()
-                menu.show_at(pos)
+                menu.show_at(pos, parent_viewport=target_vp)
                 event.accept()
                 return True
 
@@ -1522,9 +1606,10 @@ class RadialMenuController(QObject):
             hotkey_str = self.config.get("hotkey", "Tab").strip()
             seq = QKeySequence(hotkey_str)
             if not seq.isEmpty() and event.key() == seq[0]:
-                cursor_pos = vp.mapFromGlobal(vp.cursor().pos())
+                cursor_pos = target_vp.mapFromGlobal(target_vp.cursor().pos())
+                self._active_target_viewport = target_vp
                 menu = self.get_radial_widget()
-                menu.show_at(cursor_pos)
+                menu.show_at(cursor_pos, parent_viewport=target_vp)
                 event.accept()
                 return True
 
