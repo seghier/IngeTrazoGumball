@@ -236,77 +236,91 @@ class NavOrbitController(QObject):
     def is_perspective(self, target: Optional[Any] = None) -> bool:
         return not self.is_orthographic(target)
 
+    def should_show_in_viewport(self, viewport: Any) -> bool:
+        """
+        Returns True if NavOrbit should be displayed in `viewport`.
+        - Always True in Single View (1-View mode).
+        - In Split Views (2, 3, 4 views), True ONLY for the 'Perspective' pane
+          (even if its camera projection is toggled to Axonometric/Orthographic),
+          and False for dedicated 2D Ortho panes (Top, Front, Right, etc.).
+        """
+        if viewport is None:
+            return False
+
+        win = self.get_window()
+        split_ctrl = getattr(win, "_split_controller", None) if win is not None else None
+
+        if split_ctrl is not None:
+            # In 1-View mode, always show NavOrbit on the main viewport
+            if getattr(split_ctrl, "mode", 1) == 1:
+                return True
+            # In 2, 3, or 4 Views, check the pane's assigned preset
+            if hasattr(split_ctrl, "viewports") and viewport in split_ctrl.viewports:
+                idx = split_ctrl.viewports.index(viewport)
+                if hasattr(split_ctrl, "presets") and idx < len(split_ctrl.presets):
+                    preset = split_ctrl.presets[idx].strip().lower()
+                    return preset in ("perspective", "iso", "persp")
+
+        # Fallback to explicit attribute if set by apply_viewport_preset
+        is_3d = getattr(viewport, "_is_3d_view", None)
+        if is_3d is not None:
+            return bool(is_3d)
+
+        return True
+
     def toggle_ortho_perspective(self, viewport: Optional[Any] = None) -> None:
+        """Switches the Perspective viewport's camera between Orthographic (Axo) and Perspective."""
         vp = viewport or getattr(self, "_active_viewport", None) or self.get_viewport()
         cam = getattr(vp, "camera", None) if vp is not None else self.get_camera()
-        win = self.get_window()
         new_ortho = not self.is_orthographic(vp)
         toggled = False
 
-        for obj in (vp, cam, win):
-            if obj is None or toggled:
-                break
-            for method_name in ("toggle_ortho", "toggle_projection", "toggle_perspective", "switch_projection"):
-                fn = getattr(obj, method_name, None)
-                if callable(fn):
-                    try:
-                        fn()
-                        toggled = True
-                        break
-                    except Exception:
-                        pass
-            if toggled:
-                break
-            for setter_name in ("set_ortho", "set_orthographic"):
-                fn = getattr(obj, setter_name, None)
-                if callable(fn):
-                    try:
-                        fn(new_ortho)
-                        toggled = True
-                        break
-                    except Exception:
-                        pass
-            if toggled:
-                break
-            fn_persp = getattr(obj, "set_perspective", None)
-            if callable(fn_persp):
+        # 1. Prefer IngeTrazo's native camera.set_projection API
+        if cam is not None and hasattr(cam, "set_projection"):
+            try:
+                cam.set_projection("parallel" if new_ortho else "perspective")
+                toggled = True
+            except Exception:
+                pass
+
+        # 2. Also sync camera/viewport boolean attributes directly
+        for obj in (cam, vp):
+            if obj is None:
+                continue
+            if hasattr(obj, "perspective") and not callable(getattr(obj, "perspective")):
                 try:
-                    fn_persp(not new_ortho)
+                    setattr(obj, "perspective", not new_ortho)
+                    if hasattr(obj, "two_point"):
+                        setattr(obj, "two_point", False)
                     toggled = True
-                    break
                 except Exception:
                     pass
+            for attr in ("ortho", "is_ortho", "orthographic", "is_orthographic", "_ortho"):
+                if hasattr(obj, attr) and not callable(getattr(obj, attr)):
+                    try:
+                        setattr(obj, attr, new_ortho)
+                        toggled = True
+                    except Exception:
+                        pass
 
+        # 3. Fallback to setter methods on viewport or camera
         if not toggled:
-            for obj in (cam, vp):
-                if obj is None:
-                    continue
-                for attr in ("ortho", "is_ortho", "orthographic", "is_orthographic", "_ortho"):
-                    if hasattr(obj, attr) and not callable(getattr(obj, attr)):
+            for obj in (vp, cam):
+                if obj is None or toggled:
+                    break
+                for setter_name in ("set_ortho", "set_orthographic"):
+                    fn = getattr(obj, setter_name, None)
+                    if callable(fn):
                         try:
-                            setattr(obj, attr, new_ortho)
+                            fn(new_ortho)
                             toggled = True
                             break
                         except Exception:
                             pass
-                if hasattr(obj, "perspective") and not callable(getattr(obj, "perspective")):
-                    try:
-                        setattr(obj, "perspective", not new_ortho)
-                        toggled = True
-                        break
-                    except Exception:
-                        pass
-                if hasattr(obj, "projection_mode") and not callable(getattr(obj, "projection_mode")):
-                    try:
-                        setattr(obj, "projection_mode", "ortho" if new_ortho else "perspective")
-                        toggled = True
-                        break
-                    except Exception:
-                        pass
 
         if vp is not None:
             if hasattr(vp, "measurementChanged"):
-                mode_label = "Orthographic" if self.is_orthographic(vp) else "Perspective"
+                mode_label = "Orthographic (Axo)" if self.is_orthographic(vp) else "Perspective"
                 vp.measurementChanged.emit(f"Projection: {mode_label}")
             vp.update()
 
@@ -349,7 +363,8 @@ class NavOrbitController(QObject):
             return
 
         camera = getattr(viewport, "camera", None)
-        if camera is None or not self.is_perspective(viewport):
+        # Show in Perspective viewport (even when switched to Axo/Ortho), hide in 2D Ortho panes
+        if camera is None or not self.should_show_in_viewport(viewport):
             return
 
         if not getattr(viewport, "_navorbit_filter_installed", False):
@@ -582,7 +597,7 @@ class NavOrbitController(QObject):
         is_hov = self.hovered_part and self.hovered_part.get("id") == "ORTHO_PERSP"
         is_press = self.pressed_part and self.pressed_part.get("id") == "ORTHO_PERSP"
 
-        is_ortho = self.is_orthographic()
+        is_ortho = self.is_orthographic(getattr(self, "_active_viewport", None))
 
         r = 12.0
         dx = r * 0.866  # cos(30°)
@@ -783,8 +798,8 @@ class NavOrbitController(QObject):
 
         target_vp = obj
 
-        # NavOrbit must only interact with Perspective views
-        if not self.is_perspective(target_vp):
+        # Interact only in the Perspective viewport (even when in Axo/Ortho mode)
+        if not self.should_show_in_viewport(target_vp):
             return False
 
         etype = event.type()
