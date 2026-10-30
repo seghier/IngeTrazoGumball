@@ -2,15 +2,7 @@
 """
 IngeTrazo Navigation Orbit (NavOrbit) Plugin Module.
 ==================================================
-Interactive 3D orientation & navigation gizmo featuring:
-- 6 Clickable Primary Cube Faces: TOP, BOTTOM, FRONT, BACK, RIGHT, LEFT (with 3D sheared labels)
-- Clean, unchamfered solid cube without edges or corner hit zones
-- 4 Directional Step Triangles (▲ ▼ ◄ ►) for 45° orbital steps (up, down, left, right)
-- 2 Thick Curved Ribbon Roll Arrows (↶ ↷) at the top-left and top-right for 90° roll steps
-- Top-Right Home Button (🏠): Smoothly restores default isometric view
-- Bottom-Right Mini Cube: Switches camera between Orthographic and Perspective projection
-- Free Orbit Dragging: Click and drag anywhere on the cube to smoothly spin the scene
-- Smooth Camera Glide: Eased 60fps interpolation between views
+Interactive 3D orientation & navigation gizmo for Perspective viewports.
 """
 
 from __future__ import annotations
@@ -32,12 +24,12 @@ from PySide6.QtGui import (
     QTransform,
     QVector3D,
 )
+from PySide6.QtWidgets import QApplication
 
 log = logging.getLogger("ingetrazo.plugins")
 
 
 def _shortest_angle_diff(target: float, current: float) -> float:
-    """Computes the shortest angular difference (target - current) in [-pi, pi]."""
     diff = (target - current) % (2.0 * math.pi)
     if diff > math.pi:
         diff -= 2.0 * math.pi
@@ -47,7 +39,6 @@ def _shortest_angle_diff(target: float, current: float) -> float:
 class NavOrbitController(QObject):
     """Interactive Navigation Orbit (NavOrbit) controller for IngeTrazo."""
 
-    # Visual Palette (clean, modern CAD style)
     COLOR_FACE_BASE = QColor(210, 212, 216)
     COLOR_BUTTON_FILL = QColor(204, 206, 210, 235)
     COLOR_HOVER_FILL = QColor(95, 185, 255, 240)
@@ -61,19 +52,16 @@ class NavOrbitController(QObject):
         self._window: Any = None
         self._viewport: Any = None
 
-        # Settings & State (with fallback migration from legacy ViewCube settings)
         self.settings = QSettings("IngeTrazo", "NavOrbit")
         old_val = QSettings("IngeTrazo", "ViewCube").value("enabled", None)
         default_enabled = True if old_val is None else bool(old_val)
         self.enabled = self.settings.value("enabled", default_enabled, type=bool)
 
-        # Layout geometry (top-right corner of viewport)
         self.margin_right = 20.0
         self.margin_top = 20.0
-        self.widget_radius = 75.0      # Total interactive radius from center
-        self.cube_scale = 31.0         # 3D cube half-extent in screen pixels
+        self.widget_radius = 75.0
+        self.cube_scale = 31.0
 
-        # Interaction state
         self.hovered_part: Optional[Dict[str, Any]] = None
         self.pressed_part: Optional[Dict[str, Any]] = None
         self._is_mouse_down = False
@@ -82,36 +70,27 @@ class NavOrbitController(QObject):
         self._last_mouse_pos = QPointF(0, 0)
         self._center_pos = QPointF(0, 0)
 
-        # Hit-test cache for current frame
         self._current_parts: List[Dict[str, Any]] = []
         self._control_polys: Dict[str, QPolygonF] = {}
         self._home_poly = QPolygonF()
         self._ortho_cube_poly = QPolygonF()
 
-        # Prebuilt 3D cube face parts (only the 6 primary faces; edges and corners removed)
         self._raw_cube_parts: List[Dict[str, Any]] = self._generate_cube_parts()
 
-        # Menu & toolbar actions for synchronization
         self.menu_actions: List[QAction] = []
         self.toolbar_action: Optional[QAction] = None
 
-        # Smooth glide camera animation
         self._anim_timer = QTimer(self)
-        self._anim_timer.setInterval(16)  # ~60 FPS
+        self._anim_timer.setInterval(16)
         self._anim_timer.timeout.connect(self._on_anim_step)
         self._anim_start_time = 0.0
-        self._anim_duration = 220.0  # ms
+        self._anim_duration = 220.0
         self._anim_start_yaw = 0.0
         self._anim_diff_yaw = 0.0
         self._anim_start_pitch = 0.0
         self._anim_diff_pitch = 0.0
 
-        # Hook into IngeTrazo
         self._init_hooks()
-
-    # ========================================================================
-    # IngeTrazo Handles & Hooking
-    # ========================================================================
 
     def get_window(self) -> Any:
         if self._window is not None:
@@ -124,17 +103,14 @@ class NavOrbitController(QObject):
         return self._window
 
     def get_viewport(self) -> Any:
+        win = self.get_window()
+        if win is not None and getattr(win, "viewport", None) is not None:
+            return win.viewport
         if self._viewport is not None:
             return self._viewport
         vp = getattr(self.app, "viewport", None) or getattr(self.app, "_viewport", None)
         if vp is not None:
             self._viewport = vp
-            return self._viewport
-        win = self.get_window()
-        if win is not None:
-            vp = getattr(win, "viewport", None) or getattr(win, "_viewport", None)
-            if vp is not None:
-                self._viewport = vp
         return self._viewport
 
     def get_camera(self) -> Any:
@@ -144,35 +120,33 @@ class NavOrbitController(QObject):
         return None
 
     def _init_hooks(self) -> None:
-        """Hooks NavOrbit into viewport overlay and event filters."""
         if hasattr(self.app, "add_overlay"):
             try:
                 self.app.add_overlay(self.draw)
             except Exception as e:
                 log.warning(f"Could not register NavOrbit overlay: {e}")
 
-        QTimer.singleShot(100, self._install_event_filters)
+        self._install_event_filters()
         self._register_menu_actions()
 
     def _install_event_filters(self) -> None:
         win = self.get_window()
         if win is not None:
             win.installEventFilter(self)
-            try:
-                from PySide6.QtWidgets import QWidget
-                for child in win.findChildren(QWidget):
-                    if child.__class__.__name__ == "Viewport":
-                        child.installEventFilter(self)
-                        child.setMouseTracking(True)
-            except Exception:
-                pass
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl is not None and hasattr(split_ctrl, "viewports"):
+                for v in split_ctrl.viewports:
+                    if not getattr(v, "_navorbit_filter_installed", False):
+                        v.installEventFilter(self)
+                        v.setMouseTracking(True)
+                        v._navorbit_filter_installed = True
         vp = self.get_viewport()
-        if vp is not None:
+        if vp is not None and not getattr(vp, "_navorbit_filter_installed", False):
             vp.installEventFilter(self)
             vp.setMouseTracking(True)
+            vp._navorbit_filter_installed = True
 
     def _register_menu_actions(self) -> None:
-        """Adds 'Show Navigation Orbit' to Extensions and Camera/View menus."""
         if hasattr(self.app, "add_menu_action"):
             try:
                 act = self.app.add_menu_action(
@@ -205,10 +179,6 @@ class NavOrbitController(QObject):
             except Exception:
                 pass
 
-    # ========================================================================
-    # Independent Toggle Control
-    # ========================================================================
-
     def set_enabled(self, val: bool) -> None:
         if self.enabled == val:
             return
@@ -232,12 +202,7 @@ class NavOrbitController(QObject):
     def toggle(self) -> None:
         self.set_enabled(not self.enabled)
 
-    # ========================================================================
-    # Orthographic / Perspective Detection & Switching
-    # ========================================================================
-
     def is_orthographic(self, target: Optional[Any] = None) -> bool:
-        """Returns True if the camera or viewport is currently in Orthographic mode."""
         if target is not None:
             if hasattr(target, "camera"):
                 vp = target
@@ -269,27 +234,19 @@ class NavOrbitController(QObject):
         return False
 
     def is_perspective(self, target: Optional[Any] = None) -> bool:
-        """Returns True if the camera or viewport is in Perspective mode."""
         return not self.is_orthographic(target)
 
     def toggle_ortho_perspective(self, viewport: Optional[Any] = None) -> None:
-        """Switches the camera/viewport between Orthographic and Perspective projection."""
         vp = viewport or getattr(self, "_active_viewport", None) or self.get_viewport()
         cam = getattr(vp, "camera", None) if vp is not None else self.get_camera()
         win = self.get_window()
         new_ortho = not self.is_orthographic(vp)
         toggled = False
 
-        # 1. Check direct methods on viewport or camera
         for obj in (vp, cam, win):
             if obj is None or toggled:
                 break
-            for method_name in (
-                "toggle_ortho",
-                "toggle_projection",
-                "toggle_perspective",
-                "switch_projection",
-            ):
+            for method_name in ("toggle_ortho", "toggle_projection", "toggle_perspective", "switch_projection"):
                 fn = getattr(obj, method_name, None)
                 if callable(fn):
                     try:
@@ -320,7 +277,6 @@ class NavOrbitController(QObject):
                 except Exception:
                     pass
 
-        # 2. Check boolean/string attributes on camera or viewport
         if not toggled:
             for obj in (cam, vp):
                 if obj is None:
@@ -348,33 +304,14 @@ class NavOrbitController(QObject):
                     except Exception:
                         pass
 
-        # 3. Also sync any window QAction if present
-        if not toggled and win is not None and hasattr(win, "findChildren"):
-            for act in win.findChildren(QAction):
-                txt = act.text().lower()
-                if "ortho" in txt or "parallel" in txt or "perspectiv" in txt:
-                    if act.isCheckable() or "toggle" in txt:
-                        act.trigger()
-                        toggled = True
-                        break
-
         if vp is not None:
             if hasattr(vp, "measurementChanged"):
-                mode_label = "Orthographic" if self.is_orthographic() else "Perspective"
+                mode_label = "Orthographic" if self.is_orthographic(vp) else "Perspective"
                 vp.measurementChanged.emit(f"Projection: {mode_label}")
             vp.update()
 
-    # ========================================================================
-    # 6-Face Cube Geometry (Edges & Corners Removed)
-    # ========================================================================
-
     def _generate_cube_parts(self) -> List[Dict[str, Any]]:
-        """
-        Generates the 6 full square faces of the 3D cube.
-        Edges and corners are removed as requested.
-        """
         parts: List[Dict[str, Any]] = []
-
         face_specs = [
             ("TOP", QVector3D(0, 0, 1), QVector3D(1, 0, 0), QVector3D(0, 1, 0),
              (math.radians(-90.0), math.radians(90.0))),
@@ -389,14 +326,7 @@ class NavOrbitController(QObject):
             ("LEFT", QVector3D(-1, 0, 0), QVector3D(0, -1, 0), QVector3D(0, 0, 1),
              (math.radians(180.0), 0.0)),
         ]
-
-        # Standard clean square face UV vertices (full extent: [-1, 1] x [-1, 1])
-        quad_uv = [
-            (-1.0, -1.0),
-            (1.0, -1.0),
-            (1.0, 1.0),
-            (-1.0, 1.0),
-        ]
+        quad_uv = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
 
         for fname, norm, u_ax, v_ax, f_pose in face_specs:
             verts = [norm + u_ax * u + v_ax * v for u, v in quad_uv]
@@ -412,28 +342,17 @@ class NavOrbitController(QObject):
                 "u_ax": u_ax,
                 "v_ax": v_ax,
             })
-
         return parts
 
-    # ========================================================================
-    # Viewport Drawing Overlay
-    # ========================================================================
-
     def draw(self, viewport: Any, painter: QPainter) -> None:
-        """Main overlay rendering callback."""
         if not self.enabled or viewport is None:
             return
 
         camera = getattr(viewport, "camera", None)
-        if camera is None:
+        if camera is None or not self.is_perspective(viewport):
             return
 
-        # NavOrbit must only appear in Perspective view
-        if not self.is_perspective(viewport):
-            return
-
-        # Ensure event filter is active on this perspective viewport
-        if not hasattr(viewport, "_navorbit_filter_installed"):
+        if not getattr(viewport, "_navorbit_filter_installed", False):
             try:
                 viewport.installEventFilter(self)
                 viewport.setMouseTracking(True)
@@ -459,14 +378,10 @@ class NavOrbitController(QObject):
             ev = vm.mapVector(v3d)
             return QPointF(cx + ev.x() * scale, cy - ev.y() * scale), ev.z()
 
-        # --------------------------------------------------------------------
-        # 1. Draw 3D Cube (6 Primary Faces with 3D perspective labels)
-        # --------------------------------------------------------------------
         visible_parts: List[Tuple[float, float, Dict[str, Any], QPolygonF]] = []
 
         for p_info in self._raw_cube_parts:
             norm_eye = vm.mapVector(p_info["normal"]).normalized()
-            # Draw faces facing the camera
             if norm_eye.z() > -0.04:
                 poly_pts: List[QPointF] = []
                 depths: List[float] = []
@@ -477,17 +392,10 @@ class NavOrbitController(QObject):
                 avg_depth = sum(depths) / len(depths)
                 visible_parts.append((avg_depth, norm_eye.z(), p_info, QPolygonF(poly_pts)))
 
-        # Painter's algorithm (back-to-front by depth)
         visible_parts.sort(key=lambda item: item[0])
         self._current_parts.clear()
 
-        border_pen = QPen(
-            self.COLOR_BORDER,
-            1.2,
-            Qt.PenStyle.SolidLine,
-            Qt.PenCapStyle.RoundCap,
-            Qt.PenJoinStyle.RoundJoin,
-        )
+        border_pen = QPen(self.COLOR_BORDER, 1.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
 
         for avg_depth, nz, p_info, poly in visible_parts:
             p_info["polygon"] = poly
@@ -495,7 +403,6 @@ class NavOrbitController(QObject):
 
             is_hov = self.hovered_part and self.hovered_part.get("id") == p_info["id"]
             is_press = self.pressed_part and self.pressed_part.get("id") == p_info["id"]
-
             shade = max(0.0, min(1.0, nz))
 
             if is_press:
@@ -510,13 +417,9 @@ class NavOrbitController(QObject):
             painter.setPen(border_pen)
             painter.drawPolygon(poly)
 
-            # 3D Perspective-Sheared Face Label
             if p_info.get("label") and nz > 0.12:
                 self._draw_sheared_face_label(painter, project, p_info, scale)
 
-        # --------------------------------------------------------------------
-        # 2. Draw 4 Directional Step Triangles & 2 Curved Ribbon Roll Arrows
-        # --------------------------------------------------------------------
         self._control_polys.clear()
 
         tri_dist = 57.0
@@ -539,61 +442,36 @@ class NavOrbitController(QObject):
             self._control_polys[aid] = t_poly
             self._draw_control_poly(painter, aid, t_poly, border_pen)
 
-        # Thick Curved Ribbon Roll Arrows (flanking the Top triangle arrow)
         roll_r_in = 56.5
         roll_r_out = 65.5
-        roll_left_poly = self._make_curved_ribbon_arrow(
-            cx, cy, roll_r_in, roll_r_out, start_deg=112.0, end_deg=148.0, head_end_deg=163.0
-        )
-        roll_right_poly = self._make_curved_ribbon_arrow(
-            cx, cy, roll_r_in, roll_r_out, start_deg=68.0, end_deg=32.0, head_end_deg=17.0
-        )
+        roll_left_poly = self._make_curved_ribbon_arrow(cx, cy, roll_r_in, roll_r_out, start_deg=112.0, end_deg=148.0, head_end_deg=163.0)
+        roll_right_poly = self._make_curved_ribbon_arrow(cx, cy, roll_r_in, roll_r_out, start_deg=68.0, end_deg=32.0, head_end_deg=17.0)
 
         self._control_polys["ROLL_LEFT"] = roll_left_poly
         self._control_polys["ROLL_RIGHT"] = roll_right_poly
         self._draw_control_poly(painter, "ROLL_LEFT", roll_left_poly, border_pen)
         self._draw_control_poly(painter, "ROLL_RIGHT", roll_right_poly, border_pen)
 
-        # --------------------------------------------------------------------
-        # 3. Top-Right Corner Button: Home Icon
-        # --------------------------------------------------------------------
-        home_cx = cx + 55.0
-        home_cy = cy - 55.0
-        self._draw_home_button(painter, home_cx, home_cy, border_pen)
-
-        # --------------------------------------------------------------------
-        # 4. Bottom-Right Corner Button: Mini Cube (Ortho / Perspective Switch)
-        # --------------------------------------------------------------------
-        mini_cx = cx + 46.0
-        mini_cy = cy + 48.0
-        self._draw_ortho_persp_mini_cube(painter, mini_cx, mini_cy, border_pen)
+        self._draw_home_button(painter, cx + 55.0, cy - 55.0, border_pen)
+        self._draw_ortho_persp_mini_cube(painter, cx + 46.0, cy + 48.0, border_pen)
 
         painter.restore()
 
-    def _draw_sheared_face_label(
-        self,
-        painter: QPainter,
-        project_fn: Any,
-        p_info: Dict[str, Any],
-        scale: float,
-    ) -> None:
-        """Draws the face label ('TOP', 'FRONT', 'RIGHT', etc.) sheared in 3D onto the face."""
+    def _draw_sheared_face_label(self, painter: QPainter, project_fn: Any, p_info: Dict[str, Any], scale: float) -> None:
         center_3d: QVector3D = p_info["center"]
         u_ax: QVector3D = p_info["u_ax"]
         v_ax: QVector3D = p_info["v_ax"]
 
         pc, _ = project_fn(center_3d)
         pu, _ = project_fn(center_3d + u_ax)
-        pv, _ = project_fn(center_3d - v_ax)  # -v_ax because Qt +Y is downward
+        pv, _ = project_fn(center_3d - v_ax)
 
         ux = (pu.x() - pc.x()) / scale
         uy = (pu.y() - pc.y()) / scale
         vx = (pv.x() - pc.x()) / scale
         vy = (pv.y() - pc.y()) / scale
 
-        # Check determinant to avoid degenerate text transform at grazing angles
-        det = ux * vy - uy * vx
-        if abs(det) < 0.08:
+        if abs(ux * vy - uy * vx) < 0.08:
             return
 
         painter.save()
@@ -610,17 +488,7 @@ class NavOrbitController(QObject):
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, p_info["label"])
         painter.restore()
 
-    def _make_curved_ribbon_arrow(
-        self,
-        cx: float,
-        cy: float,
-        r_in: float,
-        r_out: float,
-        start_deg: float,
-        end_deg: float,
-        head_end_deg: float,
-    ) -> QPolygonF:
-        """Builds a thick curved ribbon arrow polygon."""
+    def _make_curved_ribbon_arrow(self, cx: float, cy: float, r_in: float, r_out: float, start_deg: float, end_deg: float, head_end_deg: float) -> QPolygonF:
         pts: List[QPointF] = []
         steps = 14
 
@@ -628,26 +496,22 @@ class NavOrbitController(QObject):
             rad = math.radians(deg)
             return QPointF(cx + r * math.cos(rad), cy - r * math.sin(rad))
 
-        # Outer arc from start_deg to end_deg
         for i in range(steps + 1):
             t = i / float(steps)
-            ang = start_deg + (end_deg - start_deg) * t
-            pts.append(pt_polar(r_out, ang))
+            pts.append(pt_polar(r_out, start_deg + (end_deg - start_deg) * t))
 
-        # Outer wing of arrowhead -> tip -> inner wing of arrowhead
         r_mid = (r_in + r_out) * 0.5
         wing_pad = (r_out - r_in) * 0.48
         pts.append(pt_polar(r_out + wing_pad, end_deg))
         pts.append(pt_polar(r_mid, head_end_deg))
         pts.append(pt_polar(r_in - wing_pad, end_deg))
 
-        # Inner arc from end_deg back to start_deg
         for i in range(steps, -1, -1):
             t = i / float(steps)
-            ang = start_deg + (end_deg - start_deg) * t
-            pts.append(pt_polar(r_in, ang))
+            pts.append(pt_polar(r_in, start_deg + (end_deg - start_deg) * t))
 
         return QPolygonF(pts)
+
 
     def _draw_control_poly(
         self,
@@ -806,11 +670,16 @@ class NavOrbitController(QObject):
 
         return None
 
-    def is_over_widget_area(self, mx: float, my: float) -> bool:
-        """Checks if mouse is within the bounding area of NavOrbit."""
+    def is_over_widget_area(self, mx: float, my: float, viewport: Optional[Any] = None) -> bool:
+        """Checks if mouse is within the bounding area of NavOrbit on `viewport`."""
         if not self.enabled:
             return False
-        dist = math.hypot(mx - self._center_pos.x(), my - self._center_pos.y())
+        if viewport is not None and hasattr(viewport, "width"):
+            cx = float(viewport.width()) - self.margin_right - self.widget_radius
+            cy = self.margin_top + self.widget_radius
+        else:
+            cx, cy = self._center_pos.x(), self._center_pos.y()
+        dist = math.hypot(mx - cx, my - cy)
         return dist <= (self.widget_radius + 18.0)
 
     # ========================================================================
@@ -908,19 +777,14 @@ class NavOrbitController(QObject):
         if not self.enabled:
             return False
 
-        win = self.get_window()
-        vp = self.get_viewport()
-
-        # Identify target viewport
-        if hasattr(obj, "camera"):
-            target_vp = obj
-        elif obj == win:
-            target_vp = getattr(win, "viewport", None) or getattr(self, "_active_viewport", None) or vp
-        else:
+        # Only process mouse events sent directly to a Viewport widget
+        if not hasattr(obj, "camera"):
             return False
 
+        target_vp = obj
+
         # NavOrbit must only interact with Perspective views
-        if target_vp is None or not self.is_perspective(target_vp):
+        if not self.is_perspective(target_vp):
             return False
 
         etype = event.type()
@@ -932,7 +796,6 @@ class NavOrbitController(QObject):
             pos = event.position() if hasattr(event, "position") else event.pos()
             mx, my = float(pos.x()), float(pos.y())
 
-            # Activate free-orbit dragging if mouse moved > 4.5px while pressed on widget
             if self._is_mouse_down and not self.is_dragging_cube:
                 if math.hypot(mx - self._press_mouse_pos.x(), my - self._press_mouse_pos.y()) > 4.5:
                     self.is_dragging_cube = True
@@ -959,7 +822,7 @@ class NavOrbitController(QObject):
 
             self._last_mouse_pos = QPointF(mx, my)
 
-            if self.is_over_widget_area(mx, my):
+            if self.is_over_widget_area(mx, my, viewport=target_vp):
                 hit = self.hit_test(mx, my)
                 if hit != self.hovered_part:
                     self.hovered_part = hit
@@ -972,7 +835,10 @@ class NavOrbitController(QObject):
             else:
                 if self.hovered_part is not None:
                     self.hovered_part = None
-                    target_vp.setCursor(Qt.CursorShape.ArrowCursor)
+                    if hasattr(target_vp, "_apply_tool_cursor"):
+                        target_vp._apply_tool_cursor()
+                    else:
+                        target_vp.setCursor(Qt.CursorShape.ArrowCursor)
                     target_vp.update()
 
         # --------------------------------------------------------------------
@@ -983,7 +849,7 @@ class NavOrbitController(QObject):
                 pos = event.position() if hasattr(event, "position") else event.pos()
                 mx, my = float(pos.x()), float(pos.y())
 
-                if self.is_over_widget_area(mx, my):
+                if self.is_over_widget_area(mx, my, viewport=target_vp):
                     hit = self.hit_test(mx, my)
                     if hit is not None:
                         self._anim_timer.stop()
@@ -1045,7 +911,10 @@ class NavOrbitController(QObject):
         elif etype == QEvent.Type.Leave:
             if self.hovered_part is not None and not self._is_mouse_down:
                 self.hovered_part = None
-                target_vp.setCursor(Qt.CursorShape.ArrowCursor)
+                if hasattr(target_vp, "_apply_tool_cursor"):
+                    target_vp._apply_tool_cursor()
+                else:
+                    target_vp.setCursor(Qt.CursorShape.ArrowCursor)
                 target_vp.update()
 
         return False
@@ -1064,7 +933,18 @@ def setup_navorbit(app: Any) -> NavOrbitController:
     global _NAVORBIT_CONTROLLER
     if _NAVORBIT_CONTROLLER is None:
         _NAVORBIT_CONTROLLER = NavOrbitController(app)
+    win = getattr(app, "window", None) or getattr(app, "_window", None)
+    if win:
+        win = win() if callable(win) else win
+        if win:
+            win._navorbit_controller = _NAVORBIT_CONTROLLER
+    if hasattr(app, "__dict__"):
+        app._navorbit_controller = _NAVORBIT_CONTROLLER
+    qapp = QApplication.instance()
+    if qapp:
+        qapp._navorbit_controller = _NAVORBIT_CONTROLLER
     return _NAVORBIT_CONTROLLER
 
 
 setup_viewcube = setup_navorbit
+

@@ -2,17 +2,9 @@
 """
 IngeTrazo 2-Row Radial Menu (Pie Menu) Plugin.
 ==============================================
-Customizable fast-access 2-row circular/radial marking menu for the 3D Viewport:
-- Splits the radial disc into TWO concentric tiers / rows:
-    * Inner Row (Row 1): 8 fast-flick primary tools closest to the cursor.
-    * Outer Row (Row 2): 8 secondary CAD tools in the outer concentric ring.
-- Appears centered directly under the cursor upon double-click (or custom trigger).
-- Dynamic CAD sectors with large high-resolution icons and live native tooltips.
-- Visual hover glow, directional indicators, and live center hub feedback.
-- Customizable via 'Radial Menu Settings...' in the Extensions and Tools menus.
-- Fast command picker to assign ANY existing IngeTrazo command / action.
-- Configurable triggers: Left Double-Click, Middle Click, Right Click, or Hotkey.
-- Fully persistent JSON configuration surviving application updates.
+Customizable fast-access 2-row circular/radial marking menu for all Viewports:
+- Works seamlessly in 1, 2, 3, and 4 Split Views (Perspective, Top, Front, Right, etc.).
+- Hosted on the main window so it never triggers OpenGL context rebuilds or clips inside split panes.
 """
 
 from __future__ import annotations
@@ -29,14 +21,11 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
-    QFontMetrics,
     QIcon,
     QKeySequence,
     QLinearGradient,
     QPainter,
-    QPainterPath,
     QPen,
-    QPixmap,
     QPolygonF,
 )
 from PySide6.QtWidgets import (
@@ -51,12 +40,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSlider,
-    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -79,7 +64,6 @@ def _tr(text: str) -> str:
 
 
 def is_dark_theme() -> bool:
-    """Checks whether the current application theme resolves to dark."""
     try:
         from views import theme
         from PySide6.QtGui import QGuiApplication
@@ -94,7 +78,6 @@ def is_dark_theme() -> bool:
 
 
 def get_accent_color() -> QColor:
-    """Returns the application accent colour (e.g. IngeTrazo gold-orange)."""
     try:
         from views.theme import accent_color
         col = accent_color()
@@ -104,10 +87,6 @@ def get_accent_color() -> QColor:
         pass
     return QColor(243, 115, 41)
 
-
-# ============================================================================
-# Default Radial Menu Profiles (2 Concentric Rows)
-# ============================================================================
 
 DEFAULT_CAD_INNER_SLOTS = [
     {"name": "Select", "action_text": "Select", "category": "Tools", "shortcut": "Space", "icon": "select"},
@@ -153,12 +132,7 @@ def _get_direction_label(index: int, total: int) -> str:
     return f"Slot {index + 1}"
 
 
-# ============================================================================
-# Configuration Storage
-# ============================================================================
-
 def get_config_path() -> Path:
-    """Returns persistent JSON config file path."""
     appdata = os.environ.get("APPDATA")
     if appdata:
         base = Path(appdata) / "ingetrazo"
@@ -174,7 +148,6 @@ def load_radial_config() -> Dict[str, Any]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                # Automatic seamless migration from legacy single-ring config
                 if "inner_slots" not in data:
                     old_slots = data.get("slots", [])
                     if old_slots:
@@ -185,16 +158,14 @@ def load_radial_config() -> Dict[str, Any]:
                         data["outer_slots"] = list(DEFAULT_CAD_OUTER_SLOTS)
                 if "outer_slots" not in data:
                     data["outer_slots"] = list(DEFAULT_CAD_OUTER_SLOTS)
-                # Seamlessly upgrade legacy double_click trigger to long_right_click to avoid Edit Group conflicts
                 if data.get("trigger") == "double_click" and not data.get("_custom_double_click", False):
                     data["trigger"] = "long_right_click"
                 return data
         except Exception as e:
             log.warning(f"Error reading radial menu config: {e}")
-    # Return defaults for 2-row layout
     return {
         "enabled": True,
-        "trigger": "long_right_click",  # "long_right_click", "middle_click", "right_click", "hotkey", "double_click"
+        "trigger": "long_right_click",
         "hotkey": "Tab",
         "radius": 150,
         "mid_radius": 92,
@@ -207,7 +178,6 @@ def load_radial_config() -> Dict[str, Any]:
 def save_radial_config(config: Dict[str, Any]) -> bool:
     try:
         path = get_config_path()
-        # Ensure backward compatibility by populating flat 'slots' as well
         if "slots" not in config:
             config["slots"] = list(config.get("inner_slots", [])) + list(config.get("outer_slots", []))
         path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -216,10 +186,6 @@ def save_radial_config(config: Dict[str, Any]) -> bool:
         log.exception(f"Failed to save radial menu config: {e}")
         return False
 
-
-# ============================================================================
-# Command Discovery Helper
-# ============================================================================
 
 class CommandItem:
     def __init__(self, name: str, category: str, shortcut: str, action: QAction, icon: QIcon) -> None:
@@ -231,14 +197,12 @@ class CommandItem:
 
 
 def discover_available_commands(window: Any) -> List[CommandItem]:
-    """Inspects IngeTrazo's main window and collects all actionable QActions."""
     if window is None:
         return []
 
     items: List[CommandItem] = []
     seen: set[str] = set()
 
-    # 1. First traverse MenuBar to capture true hierarchical categories
     if hasattr(window, "menuBar") and window.menuBar():
         mb = window.menuBar()
         for menu_act in mb.actions():
@@ -265,7 +229,6 @@ def discover_available_commands(window: Any) -> List[CommandItem]:
 
             _walk_menu(m, cat_title)
 
-    # 2. Gather any remaining actions registered on the window or toolbars
     for act in window.findChildren(QAction):
         if act.isSeparator():
             continue
@@ -273,7 +236,6 @@ def discover_available_commands(window: Any) -> List[CommandItem]:
         if not txt or txt in seen:
             continue
         seen.add(txt)
-        # Determine category from text or parent
         cat = "Tools"
         lower = txt.lower()
         if any(w in lower for w in ("line", "arc", "circle", "rect", "draw", "shape", "freehand", "curve", "polygon")):
@@ -290,20 +252,17 @@ def discover_available_commands(window: Any) -> List[CommandItem]:
         sc = act.shortcut().toString() if hasattr(act, "shortcut") else ""
         items.append(CommandItem(txt, cat, sc, act, act.icon()))
 
-    # Sort items by Category then Name
     items.sort(key=lambda x: (x.category, x.name))
     return items
 
 
 def find_matching_action(window: Any, action_text: str) -> Optional[QAction]:
-    """Finds a live QAction on the main window by text."""
     if window is None or not action_text:
         return None
     target = action_text.replace("&", "").strip().lower()
     if not target:
         return None
 
-    # First pass: exact clean match
     for act in window.findChildren(QAction):
         if act.isSeparator():
             continue
@@ -311,7 +270,6 @@ def find_matching_action(window: Any, action_text: str) -> Optional[QAction]:
         if t and t == target:
             return act
 
-    # Second pass: prefix / substring match with non-empty text
     for act in window.findChildren(QAction):
         if act.isSeparator():
             continue
@@ -322,25 +280,18 @@ def find_matching_action(window: Any, action_text: str) -> Optional[QAction]:
 
 
 # ============================================================================
-# 2-Row Radial Menu Floating Viewport Widget
+# 2-Row Radial Menu Floating Overlay Widget
 # ============================================================================
 
 class RadialMenuWidget(QWidget):
     """
-    2-Row Circular Pie / Marking Menu rendered directly over the 3D Viewport.
-    - Two concentric rows of command wedges:
-        * Inner Row (Row 1): Closest to center hub.
-        * Outer Row (Row 2): Outer concentric tier.
-    - Captures mouse hover angles & distances, highlighting target sector.
-    - Shows live Qt tooltips on hover.
-    - Executes target action on click or release.
-    - Closes cleanly on Esc, right-click, or click outside.
+    2-Row Circular Pie / Marking Menu hosted on the MainWindow so it works cleanly
+    over all split viewports without OpenGL reparenting crashes or pane clipping.
     """
 
-    def __init__(self, controller: "RadialMenuController", parent_viewport: QWidget) -> None:
-        super().__init__(parent_viewport)
+    def __init__(self, controller: "RadialMenuController", host_widget: QWidget) -> None:
+        super().__init__(host_widget)
         self.controller = controller
-        self.setWindowFlags(Qt.WindowType.SubWindow | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setMouseTracking(True)
@@ -363,7 +314,6 @@ class RadialMenuWidget(QWidget):
         self.hide()
 
     def _update_theme_colors(self) -> None:
-        """Adapts radial menu color palette dynamically to the current theme."""
         dark = is_dark_theme()
         accent = get_accent_color()
 
@@ -405,24 +355,24 @@ class RadialMenuWidget(QWidget):
         self._update_theme_colors()
         self.update()
 
-    def show_at(self, vp_pos: QPoint, parent_viewport: Optional[QWidget] = None) -> None:
-        """Positions and opens the 2-row radial menu centered at the viewport click point."""
-        vp = parent_viewport or self.parentWidget()
-        if vp is None:
+    def show_at(self, vp_pos: QPoint, source_viewport: Optional[QWidget] = None) -> None:
+        """Positions and opens the 2-row radial menu centered at the click point of any viewport."""
+        host = self.parentWidget()
+        if host is None:
             return
 
-        if self.parentWidget() != vp:
-            self.setParent(vp, Qt.WindowType.SubWindow | Qt.WindowType.FramelessWindowHint)
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if source_viewport is not None and source_viewport is not host:
+            host_pos = source_viewport.mapTo(host, vp_pos)
+        else:
+            host_pos = vp_pos
 
         self._update_theme_colors()
 
         total_size = int((self.outer_radius + 20) * 2)
         half = total_size // 2
 
-        # Clamp center position so radial circle stays fully inside viewport boundaries
-        cx = max(half, min(vp_pos.x(), max(half, vp.width() - half)))
-        cy = max(half, min(vp_pos.y(), max(half, vp.height() - half)))
+        cx = max(half, min(host_pos.x(), max(half, host.width() - half)))
+        cy = max(half, min(host_pos.y(), max(half, host.height() - half)))
 
         self.setGeometry(cx - half, cy - half, total_size, total_size)
         self._center_pt = QPointF(half, half)
@@ -443,7 +393,7 @@ class RadialMenuWidget(QWidget):
         except Exception:
             pass
         self.hide()
-        vp = self.parentWidget()
+        vp = getattr(self.controller, "_active_target_viewport", None) or self.controller.get_viewport()
         if vp is not None:
             vp.update()
 
@@ -454,12 +404,7 @@ class RadialMenuWidget(QWidget):
             pass
         super().hideEvent(event)
 
-    # ------------------------------------------------------------------------
-    # Math & Sector Calculation (Clockwise starting from North)
-    # ------------------------------------------------------------------------
-
     def _calc_sector_polygon(self, index: int, total: int, r_out: float, r_in: float) -> QPolygonF:
-        """Calculates a curved wedge polygon from North clockwise."""
         step = (2.0 * math.pi) / total
         mid_theta = index * step
         start_theta = mid_theta - step / 2.0
@@ -469,12 +414,10 @@ class RadialMenuWidget(QWidget):
         cx, cy = self._center_pt.x(), self._center_pt.y()
         num_segments = 16
 
-        # Outer arc (start -> end)
         for i in range(num_segments + 1):
             t = start_theta + (end_theta - start_theta) * (i / num_segments)
             pts.append(QPointF(cx + r_out * math.sin(t), cy - r_out * math.cos(t)))
 
-        # Inner arc (end -> start)
         for i in range(num_segments + 1):
             t = end_theta - (end_theta - start_theta) * (i / num_segments)
             pts.append(QPointF(cx + r_in * math.sin(t), cy - r_in * math.cos(t)))
@@ -482,25 +425,20 @@ class RadialMenuWidget(QWidget):
         return QPolygonF(pts)
 
     def _get_hovered_slot_at(self, mx: float, my: float) -> Tuple[Optional[str], int]:
-        """Returns ('inner'/'outer', slot_index) or (None, -1) based on mouse cursor distance and angle."""
         dx = mx - self._center_pt.x()
         dy = my - self._center_pt.y()
         dist = math.hypot(dx, dy)
 
-        # Inside center hub dead zone -> cancel / neutral
         if dist < self.inner_radius:
             return (None, -1)
-        # Outside radial menu boundary -> cancel / neutral
         if dist > self.outer_radius + 8.0:
             return (None, -1)
 
-        # Angle measured clockwise from North (0 rad = North, pi/2 = East, pi = South, 3pi/2 = West)
         theta = math.atan2(dx, -dy)
         if theta < 0:
             theta += 2.0 * math.pi
 
         if dist < self.mid_radius:
-            # Inner Row
             n = len(self.inner_slots)
             if n == 0:
                 return (None, -1)
@@ -508,7 +446,6 @@ class RadialMenuWidget(QWidget):
             idx = int((theta + step / 2.0) // step) % n
             return ("inner", idx)
         else:
-            # Outer Row
             n = len(self.outer_slots)
             if n == 0:
                 return (None, -1)
@@ -522,10 +459,6 @@ class RadialMenuWidget(QWidget):
         if ring == "outer" and 0 <= index < len(self.outer_slots):
             return self.outer_slots[index]
         return None
-
-    # ------------------------------------------------------------------------
-    # Event Handlers
-    # ------------------------------------------------------------------------
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position() if hasattr(event, "position") else event.pos()
@@ -558,20 +491,14 @@ class RadialMenuWidget(QWidget):
             else:
                 self.close_menu()
             event.accept()
-        elif event.button() == Qt.MouseButton.MiddleButton:
-            self.close_menu()
-            event.accept()
         else:
             self.close_menu()
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
-        # Keep the radial menu visible after releasing the initial hold trigger.
-        # It remains open until the user clicks anywhere on the canvas or picks a slot.
         event.accept()
 
     def contextMenuEvent(self, event) -> None:
-        # Suppress context menu while radial menu is active
         event.accept()
 
     def keyPressEvent(self, event) -> None:
@@ -580,18 +507,6 @@ class RadialMenuWidget(QWidget):
             event.accept()
         else:
             super().keyPressEvent(event)
-
-    def _execute_hovered_or_close(self) -> None:
-        slot = self._get_slot(self.hovered_ring, self.hovered_index)
-        if slot is not None:
-            self.close_menu()
-            self.controller.trigger_slot_action(slot)
-        else:
-            self.close_menu()
-
-    # ------------------------------------------------------------------------
-    # Rendering (2 Concentric Rows)
-    # ------------------------------------------------------------------------
 
     def paintEvent(self, event) -> None:
         self._update_theme_colors()
@@ -610,9 +525,7 @@ class RadialMenuWidget(QWidget):
 
         dark = is_dark_theme()
 
-        # --------------------------------------------------------------------
-        # 1. Draw Outer Ring Wedges (Row 2)
-        # --------------------------------------------------------------------
+        # 1. Outer Ring Wedges (Row 2)
         if n_outer > 0:
             step_out = (2.0 * math.pi) / n_outer
             for i, slot in enumerate(self.outer_slots):
@@ -635,7 +548,6 @@ class RadialMenuWidget(QWidget):
 
                 painter.drawPolygon(poly)
 
-                # Outer Ring Icon
                 mid_theta = i * step_out
                 r_icon = (r_in + r_out) / 2.0
                 ix = cx + r_icon * math.sin(mid_theta)
@@ -654,9 +566,7 @@ class RadialMenuWidget(QWidget):
                     initial = slot.get("name", "•")[:2].upper()
                     painter.drawText(QRectF(ix - 16, iy - 16, 32, 32), Qt.AlignmentFlag.AlignCenter, initial)
 
-        # --------------------------------------------------------------------
-        # 2. Draw Inner Ring Wedges (Row 1)
-        # --------------------------------------------------------------------
+        # 2. Inner Ring Wedges (Row 1)
         if n_inner > 0:
             step_in = (2.0 * math.pi) / n_inner
             for i, slot in enumerate(self.inner_slots):
@@ -679,7 +589,6 @@ class RadialMenuWidget(QWidget):
 
                 painter.drawPolygon(poly)
 
-                # Inner Ring Icon
                 mid_theta = i * step_in
                 r_icon = (r_in + r_out) / 2.0
                 ix = cx + r_icon * math.sin(mid_theta)
@@ -698,12 +607,8 @@ class RadialMenuWidget(QWidget):
                     initial = slot.get("name", "•")[:2].upper()
                     painter.drawText(QRectF(ix - 16, iy - 16, 32, 32), Qt.AlignmentFlag.AlignCenter, initial)
 
-        # --------------------------------------------------------------------
-        # 3. Draw Radial Dividers
-        # --------------------------------------------------------------------
+        # 3. Radial Dividers
         painter.setPen(QPen(self.color_divider, 1.2))
-
-        # Outer dividers
         if n_outer > 0:
             step_out = (2.0 * math.pi) / n_outer
             for i in range(n_outer):
@@ -712,7 +617,6 @@ class RadialMenuWidget(QWidget):
                 p_out = QPointF(cx + self.outer_radius * math.sin(div_theta), cy - self.outer_radius * math.cos(div_theta))
                 painter.drawLine(p_in, p_out)
 
-        # Inner dividers
         if n_inner > 0:
             step_in = (2.0 * math.pi) / n_inner
             for i in range(n_inner):
@@ -721,22 +625,14 @@ class RadialMenuWidget(QWidget):
                 p_out = QPointF(cx + self.mid_radius * math.sin(div_theta), cy - self.mid_radius * math.cos(div_theta))
                 painter.drawLine(p_in, p_out)
 
-        # --------------------------------------------------------------------
-        # 4. Concentric Circular Dividers (Splitting Row 1 and Row 2)
-        # --------------------------------------------------------------------
+        # 4. Concentric Circular Dividers
         painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        # Mid divider circle (Row 1 / Row 2 separator)
         painter.setPen(QPen(self.color_circle_mid, 1.6))
         painter.drawEllipse(self._center_pt, self.mid_radius, self.mid_radius)
-
-        # Inner boundary circle
         painter.setPen(QPen(self.color_circle_inner, 1.2))
         painter.drawEllipse(self._center_pt, self.inner_radius, self.inner_radius)
 
-        # --------------------------------------------------------------------
-        # 5. Draw Center Hub
-        # --------------------------------------------------------------------
+        # 5. Center Hub
         is_hub_active = (self.hovered_ring is not None and self.hovered_index >= 0)
         painter.setPen(QPen(self.color_border_hover if is_hub_active else self.color_border_normal, 2.0 if is_hub_active else 1.2))
         painter.setBrush(QBrush(self.color_center_normal))
@@ -762,74 +658,14 @@ class RadialMenuWidget(QWidget):
 
 
 # ============================================================================
-# Command Picker Dialog (Add Existing IngeTrazo Commands)
+# Command Picker & Settings Dialogs
 # ============================================================================
 
 class CommandPickerDialog(QDialog):
-    """Searchable dialog presenting all existing IngeTrazo commands grouped by category."""
-
     def __init__(self, parent: QWidget, commands: List[CommandItem]) -> None:
         super().__init__(parent)
         self.setWindowTitle(_tr("Select Command"))
         self.resize(520, 500)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1e222b;
-                color: #e0e4ec;
-            }
-            QLineEdit {
-                background-color: #292f3d;
-                border: 1px solid #3c4456;
-                border-radius: 4px;
-                padding: 6px 10px;
-                color: #ffffff;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border: 1px solid #f37329;
-            }
-            QTreeWidget {
-                background-color: #242935;
-                border: 1px solid #363d4e;
-                border-radius: 4px;
-                color: #dce2ee;
-                alternate-background-color: #282e3b;
-            }
-            QTreeWidget::item {
-                padding: 5px 2px;
-            }
-            QTreeWidget::item:selected {
-                background-color: #f37329;
-                color: #ffffff;
-            }
-            QHeaderView::section {
-                background-color: #1a1e27;
-                color: #9aa5b8;
-                border: 1px solid #2d3342;
-                padding: 4px 8px;
-                font-weight: bold;
-            }
-            QPushButton {
-                background-color: #2f3646;
-                border: 1px solid #434c60;
-                border-radius: 4px;
-                padding: 6px 14px;
-                color: #ffffff;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #3b4458;
-                border: 1px solid #58647d;
-            }
-            QPushButton:default {
-                background-color: #f37329;
-                border: 1px solid #ff8533;
-            }
-            QPushButton:default:hover {
-                background-color: #ff8533;
-            }
-        """)
-
         self.commands = commands
         self.selected_item: Optional[CommandItem] = None
 
@@ -837,13 +673,11 @@ class CommandPickerDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        # Search bar
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(_tr("🔍 Search commands (e.g. Line, Push, Undo, Zoom, Arc)..."))
-        self.search_edit.textChanged.connect(self._filter_tree)
+        self.search_edit.textChanged.connect(self._populate_tree)
         layout.addWidget(self.search_edit)
 
-        # Tree Widget
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels([_tr("Command"), _tr("Category"), _tr("Shortcut")])
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
@@ -853,7 +687,6 @@ class CommandPickerDialog(QDialog):
         self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.tree)
 
-        # Buttons
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btn_box.button(QDialogButtonBox.StandardButton.Ok).setText(_tr("Assign Command"))
         btn_box.accepted.connect(self._on_accept)
@@ -865,13 +698,10 @@ class CommandPickerDialog(QDialog):
     def _populate_tree(self) -> None:
         self.tree.clear()
         query = self.search_edit.text().strip().lower()
-
-        # Group commands by category
         by_cat: Dict[str, List[CommandItem]] = {}
         for cmd in self.commands:
-            if query:
-                if query not in cmd.name.lower() and query not in cmd.category.lower() and query not in cmd.shortcut.lower():
-                    continue
+            if query and query not in cmd.name.lower() and query not in cmd.category.lower() and query not in cmd.shortcut.lower():
+                continue
             by_cat.setdefault(cmd.category, []).append(cmd)
 
         for cat in sorted(by_cat.keys()):
@@ -887,9 +717,6 @@ class CommandPickerDialog(QDialog):
                 if cmd.icon and not cmd.icon.isNull():
                     row.setIcon(0, cmd.icon)
                 row.setData(0, Qt.ItemDataRole.UserRole, cmd)
-
-    def _filter_tree(self) -> None:
-        self._populate_tree()
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         cmd = item.data(0, Qt.ItemDataRole.UserRole)
@@ -908,119 +735,12 @@ class CommandPickerDialog(QDialog):
         QMessageBox.information(self, _tr("Select Command"), _tr("Please choose a command from the list."))
 
 
-# ============================================================================
-# Radial Menu Settings Window (2-Row Customization)
-# ============================================================================
-
 class RadialMenuSettingsDialog(QDialog):
-    """Settings dialog to customize triggers, radii, and commands for both concentric rows."""
-
     def __init__(self, controller: "RadialMenuController", parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.controller = controller
         self.setWindowTitle(_tr("Radial Menu Settings (2-Row)"))
         self.resize(720, 620)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1a1e27;
-                color: #e0e4ec;
-            }
-            QGroupBox, QFrame#card {
-                background-color: #222734;
-                border: 1px solid #333a4d;
-                border-radius: 6px;
-                padding: 10px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #333a4d;
-                background-color: #222734;
-                border-radius: 6px;
-                top: -1px;
-            }
-            QTabBar::tab {
-                background-color: #1a1e27;
-                color: #8fa0b5;
-                padding: 8px 18px;
-                border: 1px solid #333a4d;
-                border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                margin-right: 4px;
-                font-weight: 500;
-            }
-            QTabBar::tab:selected {
-                background-color: #222734;
-                color: #f37329;
-                border-bottom: 2px solid #f37329;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover:!selected {
-                background-color: #282f3f;
-                color: #ffffff;
-            }
-            QLabel {
-                color: #cfd6e4;
-                font-size: 12px;
-            }
-            QLabel#heading {
-                font-size: 13px;
-                font-weight: bold;
-                color: #ffffff;
-            }
-            QLabel#subheading {
-                font-size: 11px;
-                color: #8fa0b5;
-            }
-            QComboBox, QLineEdit {
-                background-color: #2b3142;
-                border: 1px solid #3c455c;
-                border-radius: 4px;
-                padding: 5px 8px;
-                color: #ffffff;
-            }
-            QComboBox:focus, QLineEdit:focus {
-                border: 1px solid #f37329;
-            }
-            QTableWidget {
-                background-color: #1e222d;
-                border: 1px solid #2e3546;
-                border-radius: 4px;
-                color: #dce2ee;
-                gridline-color: #2a3140;
-            }
-            QTableWidget::item:selected {
-                background-color: #f37329;
-                color: #ffffff;
-            }
-            QHeaderView::section {
-                background-color: #161922;
-                color: #8fa0b5;
-                border: 1px solid #262c3a;
-                padding: 5px;
-                font-weight: bold;
-            }
-            QPushButton {
-                background-color: #2b3242;
-                border: 1px solid #3c465c;
-                border-radius: 4px;
-                padding: 6px 12px;
-                color: #ffffff;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #374054;
-                border: 1px solid #505c78;
-            }
-            QPushButton#primary {
-                background-color: #f37329;
-                border: 1px solid #ff8533;
-                font-weight: bold;
-            }
-            QPushButton#primary:hover {
-                background-color: #ff8533;
-            }
-        """)
-
         self.current_inner_slots: List[Dict[str, Any]] = list(controller.config.get("inner_slots", DEFAULT_CAD_INNER_SLOTS))
         self.current_outer_slots: List[Dict[str, Any]] = list(controller.config.get("outer_slots", DEFAULT_CAD_OUTER_SLOTS))
         self._init_ui()
@@ -1030,9 +750,7 @@ class RadialMenuSettingsDialog(QDialog):
         main_layout.setContentsMargins(14, 14, 14, 14)
         main_layout.setSpacing(10)
 
-        # 1. Top Options Card
         top_card = QFrame()
-        top_card.setObjectName("card")
         top_lay = QFormLayout(top_card)
         top_lay.setContentsMargins(10, 8, 10, 8)
         top_lay.setSpacing(8)
@@ -1059,53 +777,28 @@ class RadialMenuSettingsDialog(QDialog):
 
         main_layout.addWidget(top_card)
 
-        # 2. Tabs for Inner Row & Outer Row
         self.tabs = QTabWidget()
 
-        # Tab A: Inner Row (Row 1)
         tab_inner = QWidget()
         lay_inner = QVBoxLayout(tab_inner)
-        lay_inner.setContentsMargins(10, 10, 10, 10)
-        lay_inner.setSpacing(8)
-
-        lbl_in_desc = QLabel(_tr("⭕ Inner Row (Row 1): Fast-flick primary tools closest to the cursor"))
-        lbl_in_desc.setObjectName("subheading")
-        lay_inner.addWidget(lbl_in_desc)
-
         self.table_inner = self._create_slot_table()
         lay_inner.addWidget(self.table_inner)
-
-        bar_in = self._create_slot_button_bar(is_inner=True)
-        lay_inner.addLayout(bar_in)
-
+        lay_inner.addLayout(self._create_slot_button_bar(is_inner=True))
         self.tabs.addTab(tab_inner, _tr("⭕ Inner Row (Row 1)"))
 
-        # Tab B: Outer Row (Row 2)
         tab_outer = QWidget()
         lay_outer = QVBoxLayout(tab_outer)
-        lay_outer.setContentsMargins(10, 10, 10, 10)
-        lay_outer.setSpacing(8)
-
-        lbl_out_desc = QLabel(_tr("⭕ Outer Row (Row 2): Extended secondary CAD tools in outer ring"))
-        lbl_out_desc.setObjectName("subheading")
-        lay_outer.addWidget(lbl_out_desc)
-
         self.table_outer = self._create_slot_table()
         lay_outer.addWidget(self.table_outer)
-
-        bar_out = self._create_slot_button_bar(is_inner=False)
-        lay_outer.addLayout(bar_out)
-
+        lay_outer.addLayout(self._create_slot_button_bar(is_inner=False))
         self.tabs.addTab(tab_outer, _tr("⭕ Outer Row (Row 2)"))
 
         main_layout.addWidget(self.tabs)
 
-        # 3. Bottom Action Buttons
         bot_bar = QHBoxLayout()
         btn_defaults = QPushButton(_tr("↺ Reset to Defaults"))
         btn_defaults.clicked.connect(self._reset_defaults)
         bot_bar.addWidget(btn_defaults)
-
         bot_bar.addStretch()
 
         btn_cancel = QPushButton(_tr("Cancel"))
@@ -1113,12 +806,10 @@ class RadialMenuSettingsDialog(QDialog):
         bot_bar.addWidget(btn_cancel)
 
         btn_save = QPushButton(_tr("Save & Apply"))
-        btn_save.setObjectName("primary")
         btn_save.clicked.connect(self._save_and_apply)
         bot_bar.addWidget(btn_save)
 
         main_layout.addLayout(bot_bar)
-
         self._populate_all_tables()
 
     def _create_slot_table(self) -> QTableWidget:
@@ -1166,22 +857,18 @@ class RadialMenuSettingsDialog(QDialog):
             r = table.rowCount()
             table.insertRow(r)
 
-            pos_label = _get_direction_label(i, n)
-            it_pos = QTableWidgetItem(pos_label)
+            it_pos = QTableWidgetItem(_get_direction_label(i, n))
             it_pos.setFlags(it_pos.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-            # Icon
             act = self.controller.resolve_action(s)
             it_icon = QTableWidgetItem()
             if act and not act.icon().isNull():
                 it_icon.setIcon(act.icon())
             it_icon.setFlags(it_icon.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-            # Name
             it_name = QTableWidgetItem(s.get("name", ""))
             it_name.setFlags(it_name.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
-            # Shortcut
             sc = s.get("shortcut") or (act.shortcut().toString() if act else "")
             it_sc = QTableWidgetItem(sc)
             it_sc.setFlags(it_sc.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -1199,16 +886,10 @@ class RadialMenuSettingsDialog(QDialog):
             QMessageBox.information(self, _tr("Select Slot"), _tr("Please select a slot row to change."))
             return
 
-        commands = self.controller.get_all_commands()
-        dlg = CommandPickerDialog(self, commands)
+        dlg = CommandPickerDialog(self, self.controller.get_all_commands())
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_item is not None:
             cmd = dlg.selected_item
-            slots[row] = {
-                "name": cmd.name,
-                "action_text": cmd.name,
-                "category": cmd.category,
-                "shortcut": cmd.shortcut,
-            }
+            slots[row] = {"name": cmd.name, "action_text": cmd.name, "category": cmd.category, "shortcut": cmd.shortcut}
             self._populate_table(table, slots)
             table.selectRow(row)
 
@@ -1228,16 +909,10 @@ class RadialMenuSettingsDialog(QDialog):
         if len(slots) >= 12:
             QMessageBox.warning(self, _tr("Limit Reached"), _tr("Maximum recommended slots per ring is 12."))
             return
-        commands = self.controller.get_all_commands()
-        dlg = CommandPickerDialog(self, commands)
+        dlg = CommandPickerDialog(self, self.controller.get_all_commands())
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_item is not None:
             cmd = dlg.selected_item
-            slots.append({
-                "name": cmd.name,
-                "action_text": cmd.name,
-                "category": cmd.category,
-                "shortcut": cmd.shortcut,
-            })
+            slots.append({"name": cmd.name, "action_text": cmd.name, "category": cmd.category, "shortcut": cmd.shortcut})
             self._populate_table(table, slots)
             table.selectRow(len(slots) - 1)
 
@@ -1296,8 +971,8 @@ class RadialMenuSettingsDialog(QDialog):
 
 class RadialMenuController(QObject):
     """
-    Main plugin controller hooking mouse/keyboard events on the viewport
-    and displaying the 2-row RadialMenuWidget.
+    Main plugin controller hooking mouse/keyboard events on all viewports
+    and displaying the 2-row RadialMenuWidget cleanly above any pane.
     """
 
     def __init__(self, app: Any) -> None:
@@ -1309,7 +984,6 @@ class RadialMenuController(QObject):
         self._menu_actions: List[QAction] = []
         self.toolbar_action: Optional[QAction] = None
 
-        # Long right click gesture tracking
         self._long_right_timer = QTimer(self)
         self._long_right_timer.setSingleShot(True)
         self._long_right_timer.setInterval(350)
@@ -1330,6 +1004,9 @@ class RadialMenuController(QObject):
         self.set_enabled(not self.config.get("enabled", True))
 
     def get_viewport(self) -> Any:
+        win = self.get_window()
+        if win is not None and getattr(win, "viewport", None) is not None:
+            return win.viewport
         return getattr(self.app, "viewport", None) or getattr(self.app, "_viewport", None)
 
     def get_window(self) -> Any:
@@ -1338,8 +1015,8 @@ class RadialMenuController(QObject):
 
     def get_radial_widget(self) -> RadialMenuWidget:
         if self.radial_widget is None:
-            vp = self.get_viewport()
-            self.radial_widget = RadialMenuWidget(self, vp)
+            host = self.get_window() or self.get_viewport()
+            self.radial_widget = RadialMenuWidget(self, host)
             self.radial_widget.update_config(self.config)
         return self.radial_widget
 
@@ -1359,60 +1036,42 @@ class RadialMenuController(QObject):
             self.toolbar_action.blockSignals(False)
 
     def _is_viewport(self, obj: Any) -> bool:
-        """Determines if the given object is an IngeTrazo 3D or orthographic viewport."""
+        """Fast O(1) check if `obj` is a Viewport."""
         if obj is None:
             return False
-        if obj == self.get_viewport():
-            return True
-        if hasattr(obj, "camera") or hasattr(obj, "paintGL"):
-            return True
         if obj.__class__.__name__ == "Viewport":
             return True
-        win = self.get_window()
-        if win is not None:
-            if obj == getattr(win, "viewport", None):
-                return True
-            if obj in getattr(win, "viewports", ()):
-                return True
-            split_ctrl = getattr(win, "_split_controller", None)
-            if split_ctrl is not None and hasattr(split_ctrl, "viewports") and obj in getattr(split_ctrl, "viewports", ()):
-                return True
+        if hasattr(obj, "camera") and hasattr(obj, "paintGL"):
+            return True
         return False
 
-    def _ensure_all_viewports_hooked(self) -> None:
-        """Finds all viewports in the window and split controller and installs the event filter."""
-        win = self.get_window()
-        if win is not None:
-            split_ctrl = getattr(win, "_split_controller", None)
-            if split_ctrl is not None and hasattr(split_ctrl, "viewports"):
-                for v in split_ctrl.viewports:
-                    if not getattr(v, "_radial_filter_hooked", False):
-                        try:
-                            v._radial_filter_hooked = True
-                            v.installEventFilter(self)
-                            v.setMouseTracking(True)
-                        except Exception:
-                            pass
-            try:
-                from PySide6.QtWidgets import QWidget
-                for child in win.findChildren(QWidget):
-                    if self._is_viewport(child) and not getattr(child, "_radial_filter_hooked", False):
-                        try:
-                            child._radial_filter_hooked = True
-                            child.installEventFilter(self)
-                            child.setMouseTracking(True)
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        vp = self.get_viewport()
-        if vp is not None and not getattr(vp, "_radial_filter_hooked", False):
+    def hook_viewport(self, vp: Any) -> None:
+        """Installs the RadialMenu event filter on a single viewport."""
+        if vp is None or not isinstance(vp, QObject):
+            return
+        if not getattr(vp, "_radial_filter_hooked", False):
             try:
                 vp._radial_filter_hooked = True
                 vp.installEventFilter(self)
-                vp.setMouseTracking(True)
+                if hasattr(vp, "setMouseTracking"):
+                    vp.setMouseTracking(True)
             except Exception:
                 pass
+
+    def _ensure_all_viewports_hooked(self) -> None:
+        """Hooks all known viewports without expensive findChildren scans."""
+        vp = self.get_viewport()
+        if vp is not None:
+            self.hook_viewport(vp)
+        win = self.get_window()
+        if win is not None:
+            win_vp = getattr(win, "viewport", None)
+            if win_vp is not None:
+                self.hook_viewport(win_vp)
+            split_ctrl = getattr(win, "_split_controller", None)
+            if split_ctrl is not None and hasattr(split_ctrl, "viewports"):
+                for v in split_ctrl.viewports:
+                    self.hook_viewport(v)
 
     def _hook_viewport(self) -> None:
         win = self.get_window()
@@ -1424,7 +1083,6 @@ class RadialMenuController(QObject):
         self._ensure_all_viewports_hooked()
 
     def _register_menu_items(self) -> None:
-        """Adds settings menu item under Extensions and Tools menus."""
         title = "⭕ Radial Menu Settings..."
         if hasattr(self.app, "add_menu_action"):
             try:
@@ -1468,11 +1126,9 @@ class RadialMenuController(QObject):
         win = self.get_window()
         return find_matching_action(win, act_text)
 
-    def trigger_slot_action(self, slot: Dict[str, Any]) -> None:
-        target_vp = getattr(self, "_active_target_viewport", None)
+    def _activate_target_pane(self, target_vp: Any) -> None:
         win = self.get_window()
         if target_vp is not None and win is not None:
-            # Activate target pane in multi-view if applicable
             split_ctrl = getattr(win, "_split_controller", None)
             if split_ctrl is not None and hasattr(split_ctrl, "viewports") and target_vp in split_ctrl.viewports:
                 try:
@@ -1481,6 +1137,10 @@ class RadialMenuController(QObject):
                     pass
             elif hasattr(win, "viewport"):
                 win.viewport = target_vp
+
+    def trigger_slot_action(self, slot: Dict[str, Any]) -> None:
+        target_vp = getattr(self, "_active_target_viewport", None)
+        self._activate_target_pane(target_vp)
 
         act = self.resolve_action(slot)
         if act is not None:
@@ -1491,10 +1151,6 @@ class RadialMenuController(QObject):
         else:
             log.warning(f"Could not find live action for '{slot.get('name')}'")
 
-    # ------------------------------------------------------------------------
-    # Event Filter (Double-Click & Trigger Detection)
-    # ------------------------------------------------------------------------
-
     def _on_long_right_timeout(self) -> None:
         if not self.config.get("enabled", True):
             return
@@ -1502,26 +1158,19 @@ class RadialMenuController(QObject):
         if vp is None or self._right_press_pos is None:
             return
         self._long_right_activated = True
+        self._activate_target_pane(vp)
         menu = self.get_radial_widget()
-        menu.show_at(self._right_press_pos, parent_viewport=vp)
+        menu.show_at(self._right_press_pos, source_viewport=vp)
 
     def eventFilter(self, obj: Any, event: QEvent) -> bool:
         if not self.config.get("enabled", True):
             return False
 
-        win = self.get_window()
-
-        # Dynamically discover newly created Viewports when window children change
-        if obj == win:
-            if event.type() in (QEvent.Type.ChildAdded, QEvent.Type.Show, QEvent.Type.Resize):
-                self._ensure_all_viewports_hooked()
-            return False
-
-        # If radial menu is currently open, any canvas click closes it
+        # If radial menu is currently open, any click outside closes it
         menu = getattr(self, "radial_widget", None)
         if menu is not None:
             try:
-                if menu.isVisible():
+                if menu.isVisible() and obj is not menu:
                     etype = event.type()
                     if etype in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
                         menu.close_menu()
@@ -1537,20 +1186,10 @@ class RadialMenuController(QObject):
             return False
 
         target_vp = obj
-
-        # Ensure filter & mouse tracking on target viewport
-        if not hasattr(target_vp, "_radial_filter_hooked"):
-            try:
-                target_vp._radial_filter_hooked = True
-                target_vp.installEventFilter(self)
-                target_vp.setMouseTracking(True)
-            except Exception:
-                pass
-
         etype = event.type()
         trigger_mode = self.config.get("trigger", "long_right_click")
 
-        # 1. Long Right Click Trigger (Hold ~350ms - avoids conflict with Edit Group double-click)
+        # 1. Long Right Click Trigger (Hold ~350ms)
         if trigger_mode == "long_right_click":
             if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.RightButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
@@ -1558,17 +1197,14 @@ class RadialMenuController(QObject):
                 self._active_target_viewport = target_vp
                 self._long_right_activated = False
                 self._long_right_timer.start(350)
-                # Let viewport receive press for navigation/selection setup
                 return False
 
             elif etype == QEvent.Type.MouseMove:
                 if self._long_right_timer.isActive() and self._right_press_pos is not None:
                     pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                     if (pos - self._right_press_pos).manhattanLength() > 6:
-                        # User is dragging / panning / orbiting -> abort long click
                         self._long_right_timer.stop()
                         self._right_press_pos = None
-                        self._active_target_viewport = None
 
             elif etype == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.RightButton:
                 if self._long_right_timer.isActive():
@@ -1586,13 +1222,14 @@ class RadialMenuController(QObject):
                     event.accept()
                     return True
 
-        # 2. Left Double-Click Trigger (Optional / Legacy)
+        # 2. Left Double-Click Trigger
         elif trigger_mode == "double_click" and etype == QEvent.Type.MouseButtonDblClick:
             if event.button() == Qt.MouseButton.LeftButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 self._active_target_viewport = target_vp
+                self._activate_target_pane(target_vp)
                 menu = self.get_radial_widget()
-                menu.show_at(pos, parent_viewport=target_vp)
+                menu.show_at(pos, source_viewport=target_vp)
                 event.accept()
                 return True
 
@@ -1601,8 +1238,9 @@ class RadialMenuController(QObject):
             if event.button() == Qt.MouseButton.MiddleButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 self._active_target_viewport = target_vp
+                self._activate_target_pane(target_vp)
                 menu = self.get_radial_widget()
-                menu.show_at(pos, parent_viewport=target_vp)
+                menu.show_at(pos, source_viewport=target_vp)
                 event.accept()
                 return True
 
@@ -1611,8 +1249,9 @@ class RadialMenuController(QObject):
             if event.button() == Qt.MouseButton.RightButton:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 self._active_target_viewport = target_vp
+                self._activate_target_pane(target_vp)
                 menu = self.get_radial_widget()
-                menu.show_at(pos, parent_viewport=target_vp)
+                menu.show_at(pos, source_viewport=target_vp)
                 event.accept()
                 return True
 
@@ -1623,23 +1262,19 @@ class RadialMenuController(QObject):
             if not seq.isEmpty() and event.key() == seq[0]:
                 cursor_pos = target_vp.mapFromGlobal(target_vp.cursor().pos())
                 self._active_target_viewport = target_vp
+                self._activate_target_pane(target_vp)
                 menu = self.get_radial_widget()
-                menu.show_at(cursor_pos, parent_viewport=target_vp)
+                menu.show_at(cursor_pos, source_viewport=target_vp)
                 event.accept()
                 return True
 
         return False
 
 
-# ============================================================================
-# Plugin Initialization Entrypoints
-# ============================================================================
-
 _RADIAL_CONTROLLER: Optional[RadialMenuController] = None
 
 
 def setup_radial_menu(app: Any) -> RadialMenuController:
-    """Initializes and returns the Radial Menu controller instance."""
     global _RADIAL_CONTROLLER
     if _RADIAL_CONTROLLER is None:
         _RADIAL_CONTROLLER = RadialMenuController(app)
@@ -1658,5 +1293,5 @@ def setup_radial_menu(app: Any) -> RadialMenuController:
 
 
 def setup(app: Any) -> RadialMenuController:
-    """Standalone extension entrypoint called if loaded as an independent plugin."""
     return setup_radial_menu(app)
+
