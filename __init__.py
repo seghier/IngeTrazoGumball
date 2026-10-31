@@ -2364,7 +2364,6 @@ def setup(app: Any) -> None:
         # 3. Initialize Quad Split View module if present
         try:
             from . import quad_split_view
-            import sys
             sys.modules.setdefault("quad_split_view", quad_split_view)
             from .quad_split_view import setup as setup_quad_split
             setup_quad_split(app)
