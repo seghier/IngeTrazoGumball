@@ -2,22 +2,22 @@
 # Copy this file to extensions/gumball.toml in https://github.com/ingelibre/ingetrazo-extensions
 
 id = "gumball"
-version = "1.2"
+version = "1.3"
 author = "seghier"
 author_url = "https://github.com/seghier"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/seghier/IngeTrazoGumball"
-download = "https://github.com/seghier/IngeTrazoGumball/releases/download/v1.2/gumball.zip"
-sha256 = "51dd36b2cea679a59f43bcd58f59b6b9be63ff34ec4faf9d22e1216374289734"
+download = "https://github.com/seghier/IngeTrazoGumball/releases/download/v1.3/gumball.zip"
+sha256 = "11320f0db5574a6d4087b5b289b29db6dd97a4eae08da4642eac63e86fbe444e"
 ingetrazo = "0.5.7"
 tags = ["productivity", "drawing"]
 
 [name]
-en = "Gumball & NavOrbit"
-es = "Gumball y NavOrbit"
-pt = "Gumball e NavOrbit"
+en = "Gumball, NavOrbit & Split Views"
+es = "Gumball, NavOrbit y Vistas Divididas"
+pt = "Gumball, NavOrbit e Vistas Divididas"
 
 [summary]
-en = "Interactive 3D transform manipulator (translate, rotate, scale), 3D navigation orbit cube (NavOrbit) with camera presets, and radial pie menu."
-es = "Manipulador interactivo de transformación 3D (mover, rotar, escalar), cubo de navegación y órbita 3D (NavOrbit) con vistas predefinidas y menú radial."
-pt = "Manipulador interativo de transformação 3D (mover, rotacionar, escalar), cubo de navegação e órbita 3D (NavOrbit) com predefinições de câmera e menu radial."
+en = "Interactive 3D transform manipulator (translate, rotate, scale), 3D navigation orbit cube (NavOrbit) with camera presets, radial pie menu, and multi-viewport split views."
+es = "Manipulador interactivo de transformación 3D (mover, rotar, escalar), cubo de navegación y órbita 3D (NavOrbit) con vistas predefinidas, menú radial y vistas divididas."
+pt = "Manipulador interativo de transformação 3D (mover, rotacionar, escalar), cubo de navegação e órbita 3D (NavOrbit) com predefinições de câmera, menu radial e visualizações divididas."

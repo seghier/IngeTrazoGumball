@@ -2361,6 +2361,16 @@ def setup(app: Any) -> None:
         except Exception as rm_ex:
             log.warning(f"Failed to initialize Radial Menu: {rm_ex}")
 
+        # 3. Initialize Quad Split View module if present
+        try:
+            from . import quad_split_view
+            import sys
+            sys.modules.setdefault("quad_split_view", quad_split_view)
+            from .quad_split_view import setup as setup_quad_split
+            setup_quad_split(app)
+        except Exception as qsv_ex:
+            log.warning(f"Failed to initialize Quad Split View: {qsv_ex}")
+
         # 3. Create or hook Toolbar with 3 Buttons: View Cube, Gumball, Pie Menu
         if win and hasattr(win, "addToolBar"):
             try:
