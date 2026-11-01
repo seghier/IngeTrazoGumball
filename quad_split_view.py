@@ -468,14 +468,6 @@ class SplitViewController(QObject):
 
         # Container widget for managing layouts safely
         self.container = MultiViewContainer(self, self.window)
-
-        # CRITICAL FIX: Detach main_vp using takeCentralWidget() BEFORE setCentralWidget()
-        # so Qt6 QMainWindow does NOT call deleteLater() on main_vp and crash on startup!
-        if self.window.centralWidget() is self.main_vp:
-            self.window.takeCentralWidget()
-
-        self.main_vp.setParent(self.container)
-        self.window.setCentralWidget(self.container)
         self.window._split_controller = self
         if hasattr(self.app, "__dict__"):
             self.app._split_controller = self
@@ -516,6 +508,11 @@ class SplitViewController(QObject):
         self._build_ui_controls()
 
         # Listen to document changes to keep scenes in sync
+        if hasattr(self.window, "documentChanged"):
+            try:
+                self.window.documentChanged.connect(self._on_document_changed)
+            except Exception:
+                pass
         if hasattr(self.app, "on_document_changed"):
             try:
                 self.app.on_document_changed(self._on_document_changed)
@@ -747,13 +744,8 @@ class SplitViewController(QObject):
         self._active_pane = pane_idx
         active_vp = self.viewports[pane_idx]
 
-        # Update window.viewport and app.viewport so tools, Gumball & Radial Menu target active pane
-        self.window.viewport = active_vp
-        if hasattr(self.app, "viewport"):
-            try:
-                self.app.viewport = active_vp
-            except Exception:
-                pass
+        # Track active pane on window without overwriting window.viewport
+        self.window._active_split_pane = active_vp
 
         for i, (badge, border) in enumerate(zip(self.badges, self.borders)):
             is_act = (i == pane_idx)
@@ -796,13 +788,35 @@ class SplitViewController(QObject):
         if mode not in (1, 2, 3, 4):
             mode = 1
 
+        # Always resolve the current authoritative viewport of the active document
+        active_vp = getattr(self.window, "viewport", None)
+        if active_vp is not None:
+            self.main_vp = active_vp
+            if len(self.viewports) > 0:
+                self.viewports[0] = active_vp
+
         if mode > 1:
             self._ensure_aux_viewports()
+            for aux in self.viewports[1:]:
+                self._sync_viewport_data(aux)
+
+            # Mount container as central widget if not already
+            if self.window.centralWidget() is not self.container:
+                if self.window.centralWidget() is self.main_vp:
+                    self.window.takeCentralWidget()
+                self.main_vp.setParent(self.container)
+                self.window.setCentralWidget(self.container)
+        else:
+            # Mode 1: Collapse back to single canonical viewport
+            if self.window.centralWidget() is self.container:
+                self.main_vp.setParent(None)
+                self.window.setCentralWidget(self.main_vp)
 
         self.mode = mode
         self._maximized_pane = None
         self._update_toolbar_checked()
-        self.apply_layout()
+        if mode > 1:
+            self.apply_layout()
         self.set_active_pane(0 if mode == 1 else self._active_pane)
 
     def toggle_maximize_pane(self, pane_idx: int) -> None:
@@ -1023,9 +1037,24 @@ class SplitViewController(QObject):
 
     def _on_document_changed(self, *args: Any) -> None:
         """When document is reset, loaded, or switched, resync scene references."""
-        for vp in self.viewports[1:]:
-            self._sync_viewport_data(vp)
-            vp.update()
+        active_vp = getattr(self.window, "viewport", None)
+        if active_vp is not None:
+            if self.main_vp is not active_vp:
+                self.main_vp = active_vp
+                if len(self.viewports) > 0:
+                    self.viewports[0] = active_vp
+                self.main_vp.setMinimumSize(50, 50)
+                self.main_vp.installEventFilter(self)
+                self._hook_viewport_tool_method(self.main_vp)
+                self._hook_plugins_on_viewport(self.main_vp)
+
+        if hasattr(self, "viewports") and len(self.viewports) > 1:
+            for vp in self.viewports[1:]:
+                self._sync_viewport_data(vp)
+                vp.update()
+
+        if self.mode > 1:
+            self.apply_layout()
 
     # ------------------------------------------------------------------
     # UI Controls: Toolbar & Menu

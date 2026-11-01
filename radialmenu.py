@@ -1136,7 +1136,7 @@ class RadialMenuController(QObject):
                 except Exception:
                     pass
             elif hasattr(win, "viewport"):
-                win.viewport = target_vp
+                setattr(win, "_active_split_pane", target_vp)
 
     def trigger_slot_action(self, slot: Dict[str, Any]) -> None:
         target_vp = getattr(self, "_active_target_viewport", None)

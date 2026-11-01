@@ -13,6 +13,7 @@ Interactive 3D transform gizmo (Rhino 8 / Blender style) featuring:
 """
 
 from __future__ import annotations
+__version__ = "1.3.1"
 import math
 import os
 import sys
