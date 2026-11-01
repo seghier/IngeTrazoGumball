@@ -7,13 +7,12 @@ Interactive 3D transform gizmo (Rhino 8 / Blender style) featuring:
 - 3 Rotation arcs: Red (ROT_X), Green (ROT_Y), Blue (ROT_Z) with live 3D protractor & Shift 15° snap
 - 3 Plane tiles: XY (Amber), XZ (Magenta), YZ (Cyan) for planar translation
 - Center origin handle for camera view-plane translation
-- Full support for 1, 2, 3 & 4 Split Viewports (Perspective, Top, Front, Right, etc.):
   * Automatically hides head-on axes, edge-on planes, and edge-on rotation arcs in 2D orthographic views
   * Works seamlessly with parallel/orthographic ray casting and per-viewport hit-testing
 """
 
 from __future__ import annotations
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 import math
 import os
 import sys
@@ -358,11 +357,7 @@ class GumballController(QObject):
             win_vp = getattr(win, "viewport", None)
             if win_vp is not None and win_vp not in vps:
                 vps.append(win_vp)
-            split_ctrl = getattr(win, "_split_controller", None)
-            if split_ctrl is not None and hasattr(split_ctrl, "viewports"):
-                for v in split_ctrl.viewports:
-                    if v is not None and v not in vps:
-                        vps.append(v)
+
         return vps
 
     def hook_viewport(self, vp: Any) -> None:
@@ -1396,10 +1391,7 @@ class GumballController(QObject):
                 hit = self.hit_test(mx, my, viewport=target_vp)
                 if hit:
                     self._drag_viewport = target_vp
-                    if win is not None:
-                        split_ctrl = getattr(win, "_split_controller", None)
-                        if split_ctrl is not None and hasattr(split_ctrl, "viewports") and target_vp in split_ctrl.viewports:
-                            split_ctrl.set_active_pane(split_ctrl.viewports.index(target_vp))
+
                     if hasattr(target_vp, "setFocus"):
                         target_vp.setFocus()
                     if hasattr(target_vp, "_box_active"):
@@ -2362,14 +2354,6 @@ def setup(app: Any) -> None:
         except Exception as rm_ex:
             log.warning(f"Failed to initialize Radial Menu: {rm_ex}")
 
-        # 3. Initialize Quad Split View module if present
-        try:
-            from . import quad_split_view
-            sys.modules.setdefault("quad_split_view", quad_split_view)
-            from .quad_split_view import setup as setup_quad_split
-            setup_quad_split(app)
-        except Exception as qsv_ex:
-            log.warning(f"Failed to initialize Quad Split View: {qsv_ex}")
 
         # 3. Create or hook Toolbar with 3 Buttons: View Cube, Gumball, Pie Menu
         if win and hasattr(win, "addToolBar"):
